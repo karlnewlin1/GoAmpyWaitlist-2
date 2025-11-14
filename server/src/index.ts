@@ -4,6 +4,9 @@ import cors from 'cors';
 import helmet from 'helmet';
 import waitlist from './routes/waitlist.js';
 import events from './routes/events.js';
+import me from './routes/me.js';
+import share from './routes/share.js';
+import { joinLimiter } from './middleware/rateLimit.js';
 import { db } from './lib/db.js';
 import { referralCodes, referralEvents } from './shared/schema.js';
 import { eq } from 'drizzle-orm';
@@ -54,9 +57,16 @@ app.get('/api/health', (_req, res) => res.json({
   service: 'goampy-api' 
 }));
 
+// Rate limiting for join endpoint
+app.use('/api/waitlist/join', joinLimiter);
+
 // APIs
 app.use('/api/waitlist', waitlist);
 app.use('/api/events', events);
+app.use('/api/me', me);
+
+// Share route with OG tags for social sharing
+app.use('/share', share);
 
 // Referral redirect with click tracking
 app.get('/r/:code', async (req, res) => {
