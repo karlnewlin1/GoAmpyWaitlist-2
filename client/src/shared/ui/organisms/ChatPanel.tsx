@@ -77,10 +77,10 @@ export function ChatPanel() {
               <p className="text-sm mb-3">First, what should I call you?</p>
               <Input
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setName(e.target.value)}
                 placeholder="Enter your name"
                 className="mb-2 bg-white/10 border-white/20 text-white placeholder:text-white/50"
-                onKeyDown={(e) => e.key === 'Enter' && handleNameSubmit()}
+                onKeyDown={(e: React.KeyboardEvent) => e.key === 'Enter' && handleNameSubmit()}
                 data-testid="input-name"
               />
               <Button 
@@ -106,10 +106,10 @@ export function ChatPanel() {
               <Input
                 type="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)}
                 placeholder="Enter your email"
                 className="mb-2 bg-white/10 border-white/20 text-white placeholder:text-white/50"
-                onKeyDown={(e) => e.key === 'Enter' && handleEmailSubmit()}
+                onKeyDown={(e: React.KeyboardEvent) => e.key === 'Enter' && handleEmailSubmit()}
                 data-testid="input-email"
               />
               <Button 
