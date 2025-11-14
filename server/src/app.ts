@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { getCorsMiddleware } from './middleware/cors.js';
 import { getLoggerMiddleware } from './middleware/logger.js';
 import { errorHandler } from './middleware/errors.js';
-import { joinLimiter } from './middleware/rateLimit.js';
+import { joinLimiter, authLimiter } from './middleware/rateLimit.js';
 
 // Routes
 import health from './routes/health.js';
@@ -51,7 +51,10 @@ export function createApp() {
   app.use('/api/events', events);
   app.use('/api/me', me);
   app.use('/api/leaderboard', leaderboard);
-  app.use('/api/auth', auth);
+  
+  // Rate limited auth routes
+  app.use('/api/auth', authLimiter, auth);
+  
   app.use('/share', share);
   app.use('/', redirects); // /r/:code routes
 
