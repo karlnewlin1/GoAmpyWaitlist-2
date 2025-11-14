@@ -20,7 +20,8 @@ export default defineConfig({
     allowedHosts: ['.replit.dev', '.replit.app', 'localhost'],
     proxy: {
       '/api': 'http://localhost:5177',
-      '/r':   'http://localhost:5177'
+      '/r':   'http://localhost:5177',
+      '/share': 'http://localhost:5177'
     }
   }
 });

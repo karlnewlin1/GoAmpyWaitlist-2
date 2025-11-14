@@ -7,7 +7,10 @@ import { normCode } from '../services/referral.js';
 const r = Router();
 
 r.get('/:code', async (req, res) => {
-  const code = normCode(req.params.code);
+  const rawCode = req.params.code;
+  const code = normCode(rawCode);
+  
+  console.log(`[share] Received code: "${rawCode}", normalized to: "${code}"`);
   
   // Look up the referral code owner with a single join
   const [rc] = await db.select({
@@ -17,6 +20,8 @@ r.get('/:code', async (req, res) => {
     .from(referralCodes)
     .innerJoin(users, eq(users.id, referralCodes.userId))
     .where(eq(referralCodes.code, code));
+
+  console.log(`[share] Lookup result:`, rc);
 
   const referrerName = rc?.name ? rc.name.split(' ')[0] : 'Someone special';
   const title = `${referrerName} invited you to join GoAmpy`;
