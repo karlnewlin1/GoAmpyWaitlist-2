@@ -1,0 +1,283 @@
+Fantastic momentum. I read your update and cross‑checked against our UX spec for Landing (chat 3‑step join), Tour (button‑driven, chat disabled), and Dashboard (mission + referral tools). Below is a production‑grade review and a set of surgical improvements with copy‑paste patches so we hit “best‑in‑class” code quality and a truly native feel. When I reference UX behavior, I anchor it to the prototypes.
+
+What’s clearly green ✅
+
+Atomic join transaction (user + waitlist + code + events) ✔
+
+Attribution: /r/:code logs clicks; ?ref=... on join logs signups ✔
+
+Case‑insensitive email via emailCi ✔
+
+Rate limiting + disposable email blocking ✔
+
+/api/me/summary for Mission Control chips ✔
+
+/share/:code with OG tags + redirect ✔
+
+Logging & health endpoint ✔
+
+Great core. Now let’s lift it to “best‑in‑class” with targeted hardening and polish.
+
+Highest‑impact improvements (do these first)
+1) Logging hardening (PII‑safe, request IDs, trusted proxy)
+
+You mentioned “response data logging.” That’s risky for PII. Log metadata, not bodies, and redact emails. Also enable trust proxy so rate‑limits use real client IP behind Replit’s proxy.
+
+server/src/index.ts (add once near the top)
+
+import pinoHttp from 'pino-http';
+import { randomUUID } from 'crypto';
+
+app.set('trust proxy', 1); // respect X-Forwarded-For from Replit
+
+app.use(pinoHttp({
+  customProps: req => ({ reqId: req.headers['x-request-id'] ?? randomUUID(), svc: 'goampy-bff' }),
+  redact: {
+    // remove sensitive values from logs
+    paths: [
+      'req.headers.authorization',
+      'req.body.email',
+      'req.body.password',
+      // if you added a response-body logger, remove it:
+      'res.body'
+    ],
+    remove: true
+  },
+  // keep logs small and useful; avoid logging response bodies
+}));
+app.use((req, res, next) => {
+  const id = (req as any).log?.bindings()?.reqId ?? randomUUID();
+  res.setHeader('x-request-id', id);
+  next();
+});
+
+2) Pooler correctness (prepare:false)
+
+With Supabase pooler (6543) you must set prepare:false to avoid intermittent errors.
+
+server/src/lib/db.ts
+
+import postgres from 'postgres';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import * as schema from '../shared/schema.js';
+
+export const db = drizzle(
+  postgres(process.env.DATABASE_URL!, {
+    ssl: 'require',
+    max: 1,
+    prepare: false // REQUIRED for Supabase Pooler
+  }),
+  { schema }
+);
+
+3) Data integrity at scale: indexes + dedupe of signups
+
+Add the missing indexes to keep analytics and leaderboards snappy; also prevent duplicate signup events for the same email on the same code.
+
+server/src/shared/schema.ts (augment; keep your current columns)
+
+import { pgTable, uuid, text, timestamp, jsonb, uniqueIndex, index } from 'drizzle-orm/pg-core';
+
+export const users = pgTable('users', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email').notNull(),
+  emailCi: text('email_ci').notNull(),
+  name: text('name'),
+  emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (t) => ({
+  ux_email_ci: uniqueIndex('ux_users_email_ci').on(t.emailCi),
+}));
+
+export const events = pgTable('events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id'),
+  eventName: text('event_name').notNull(),
+  payload: jsonb('payload'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (t) => ({
+  ix_events_user: index('ix_events_user').on(t.userId),
+  ix_events_created: index('ix_events_created').on(t.createdAt),
+}));
+
+export const referralEvents = pgTable('referral_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  referralCodeId: uuid('referral_code_id').notNull(),
+  type: text('type').$type<'click'|'signup'>().notNull(),
+  email: text('email'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (t) => ({
+  ix_referral: index('ix_referral_events_referral').on(t.referralCodeId),
+  ix_referral_created: index('ix_referral_events_created').on(t.createdAt),
+  // NOTE: for absolute dedupe, create a unique index on (referral_code_id, email, type)
+  // If your Drizzle can't express partial indexes, enforce in code before insert (see below).
+}));
+
+
+Enforce dedupe before inserting signup event (defense‑in‑depth):
+
+server/src/routes/waitlist.ts (inside your transaction, where you handle ref)
+
+import { and, eq } from 'drizzle-orm';
+
+// ...
+if (ref) {
+  const [owner] = await tx.select().from(referralCodes).where(eq(referralCodes.code, ref));
+  if (owner) {
+    // idempotent waitlist referrer backlink (your code already sets this)
+    await tx.update(waitlistEntries)
+      .set({ referrerUserId: owner.userId, source: 'referral' })
+      .where(eq(waitlistEntries.userId, u.id));
+
+    // prevent duplicate signup credits for same code/email
+    const [exists] = await tx.select().from(referralEvents)
+      .where(and(
+        eq(referralEvents.referralCodeId, owner.id),
+        eq(referralEvents.type, 'signup'),
+        eq(referralEvents.email, email)
+      ));
+    if (!exists) {
+      await tx.insert(referralEvents).values({ referralCodeId: owner.id, type: 'signup', email });
+    }
+  }
+}
+
+
+This preserves accurate points and leaderboards even if the frontend retries or a user resubmits.
+
+4) Canonicalize referral codes (lowercase, strict format) everywhere
+
+Ensure code is always lower‑case alphanumeric, max length 24, both on creation and on read. It prevents junk input and inconsistent linking.
+
+server/src/routes/waitlist.ts (helpers)
+
+const normCode = (s:string) => (s || '').toLowerCase().trim().replace(/[^a-z0-9]/g,'').slice(0,24);
+const base = (e:string)=> (e.split('@')[0]||'user').toLowerCase().replace(/[^a-z0-9]+/g,'').slice(0,8) || 'user';
+
+
+Use normCode(code) when inserting and when redirecting (/r/:code), and generate codes as base(email) + numeric suffix.
+
+server/src/index.ts (redirect with canonicalization)
+
+app.get('/r/:code', async (req, res) => {
+  const code = normCode(req.params.code);
+  try {
+    const [rc] = await db.select().from(referralCodes).where(eq(referralCodes.code, code));
+    if (rc) await db.insert(referralEvents).values({ referralCodeId: rc.id, type: 'click' });
+  } catch {}
+  return res.redirect(`/?ref=${encodeURIComponent(code)}`);
+});
+
+5) CORS discipline (and keep dev friendly)
+
+Lock CORS in production to approved origins; keep permissive in dev.
+
+server/src/index.ts
+
+import cors from 'cors';
+const origins = process.env.APP_ORIGIN?.split(',').map(s=>s.trim()).filter(Boolean);
+app.use(cors({ origin: origins && origins.length ? origins : true }));
+
+
+Set APP_ORIGIN in Replit Secrets to your preview domain(s) when you want to restrict.
+
+Frontend: polish to match the spec and feel native
+
+Landing: after the 3‑step chat, render the referral link inline (bot bubble) and persist for the dashboard; this is called out in the spec and gives the “native” feel. If you haven’t already, wire saveToWaitlist() to the real endpoint and render the referral card snippet inline; fallback to console message on failure.
+
+Dashboard: on mount, call mountReferralCard(link) if you find a stored link; that template already exists and includes Copy/Share buttons.
+
+Tour: keep the chat disabled, use button CTAs + progress, and surface “How Priority Works” + “Rewards Preview”. When the user finishes, set localStorage.next_action (e.g., "open_tasks") and route to the dashboard; that makes it feel continuous.
+
+Native feel / PWA (fast win): add a manifest + lightweight service worker so the app installs and opens full‑screen on mobile.
+
+client/public/manifest.webmanifest
+
+{
+  "name": "GoAmpy",
+  "short_name": "Ampy",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0b0f",
+  "theme_color": "#0b0b0f",
+  "icons": [
+    { "src": "/assets/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/assets/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
+
+
+In your HTML <head> add:
+
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0b0b0f">
+
+
+Minimal SW (optional now): cache shell + fonts; update on reload.
+
+Accessibility: you already use live regions, ARIA labels, and “disabled chat” messaging in Tour. Keep that when porting to React so we maintain screen‑reader behavior and keyboard focus traps on the leaderboard modal.
+
+Operational excellence (small but valuable)
+
+Health: you added a better health check—add version stamping via GIT_SHA:
+
+import { sql } from 'drizzle-orm';
+app.get('/api/health', async (_req,res) => {
+  try { await db.execute(sql`select 1`); }
+  catch { return res.status(500).json({ ok:false, db:false }); }
+  res.json({ ok:true, db:true, svc:'goampy-bff', version: process.env.GIT_SHA || 'dev', ts:new Date().toISOString() });
+});
+
+
+Error shape: standardize API errors → { error: string, code?: string }. The client can show exact copy in the Console “terminal”.
+
+Compression (optional): compression middleware for large JSON responses (leaderboard, future analytics). Avoid on tiny payloads.
+
+Migration & verification steps
+
+Migrate
+
+npm --workspace server run db:gen
+NODE_OPTIONS=--dns-result-order=ipv4first npm --workspace server run db:push \
+  || NODE_OPTIONS=--dns-result-order=ipv6first npm --workspace server run db:push
+# If DNS fights you, paste the generated SQL in Supabase SQL editor once.
+
+
+Smoke test
+
+# health
+curl -s http://localhost:5177/api/health
+
+# join
+curl -s -X POST http://localhost:5177/api/waitlist/join \
+  -H 'content-type: application/json' \
+  -d '{"name":"Ada","email":"Ada@Example.com"}'
+# -> {"referralLink":"/r/ada...."}
+
+# referral redirect logs click
+open http://localhost:5177/r/ada....
+
+# signup attribution (visit with ?ref=...)
+open "http://localhost:5000/?ref=ada...."  # then join as Bob
+
+# summary
+curl -s "http://localhost:5177/api/me/summary?email=ada@example.com"
+
+
+UI checks
+
+Landing: after join, you see the referral link as a bot bubble and in Mission Control; copy/share work.
+
+Dashboard: referral card mounts on load, mission shows “Get your first referral”, stats update.
+
+Tour: chat disabled; progress + rules + rewards visible; finishing nudges to Dashboard.
+
+What this yields
+
+Integrity: transactions + dedupe guarantee accurate crediting even with retries.
+
+Safety: no PII leakage in logs; rate‑limits use real client IPs.
+
+Speed: indexes keep referral analytics and leaderboards fast as volume grows.
+
+UX parity: the app behaves exactly like the prototypes—chat‑first on Landing, button‑first in Tour, and a ready‑to‑share Dashboard.

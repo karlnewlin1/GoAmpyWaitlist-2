@@ -2,6 +2,8 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import pinoHttp from 'pino-http';
+import { randomUUID } from 'crypto';
 import waitlist from './routes/waitlist.js';
 import events from './routes/events.js';
 import me from './routes/me.js';
@@ -9,53 +11,61 @@ import share from './routes/share.js';
 import { joinLimiter } from './middleware/rateLimit.js';
 import { db } from './lib/db.js';
 import { referralCodes, referralEvents } from './shared/schema.js';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 const app = express();
+
+// Trust proxy for accurate client IPs behind Replit
+app.set('trust proxy', 1);
+
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors());
+
+// CORS discipline - lock in production, permissive in dev
+const origins = process.env.APP_ORIGIN?.split(',').map(s=>s.trim()).filter(Boolean);
+app.use(cors({ origin: origins && origins.length ? origins : true }));
+
 app.use(express.json());
 
-// Request logging
+// Production-grade logging with PII redaction
+app.use(pinoHttp({
+  customProps: req => ({ 
+    reqId: req.headers['x-request-id'] ?? randomUUID(), 
+    svc: 'goampy-bff' 
+  }),
+  redact: {
+    paths: [
+      'req.headers.authorization',
+      'req.body.email',
+      'req.body.password',
+      'res.body'
+    ],
+    remove: true
+  }
+}));
+
+// Add request ID to response headers
 app.use((req, res, next) => {
-  const start = Date.now();
-  const path = req.path;
-  const method = req.method;
-  
-  res.on('finish', () => {
-    const duration = Date.now() - start;
-    const status = res.statusCode;
-    
-    // Log API requests with response data
-    if (path.startsWith('/api/')) {
-      const originalSend = res.send;
-      let responseBody: any;
-      
-      res.send = function(data) {
-        responseBody = data;
-        return originalSend.apply(res, arguments);
-      };
-      
-      console.log(`${method} ${path} ${status} ${duration}ms`);
-      if (responseBody) {
-        try {
-          console.log('Response:', JSON.parse(responseBody));
-        } catch {}
-      }
-    } else {
-      console.log(`${method} ${path} ${status} ${duration}ms`);
-    }
-  });
-  
+  const id = (req as any).log?.bindings()?.reqId ?? randomUUID();
+  res.setHeader('x-request-id', id);
   next();
 });
 
-// Health with timestamp
-app.get('/api/health', (_req, res) => res.json({ 
-  ok: true, 
-  timestamp: new Date().toISOString(),
-  service: 'goampy-api' 
-}));
+// Health check with DB connectivity
+app.get('/api/health', async (_req, res) => {
+  try { 
+    await db.execute(sql`select 1`);
+    res.json({ 
+      ok: true, 
+      db: true,
+      svc: 'goampy-bff',
+      version: process.env.GIT_SHA || 'dev',
+      ts: new Date().toISOString()
+    });
+  }
+  catch { 
+    return res.status(500).json({ ok: false, db: false }); 
+  }
+});
 
 // Rate limiting for join endpoint
 app.use('/api/waitlist/join', joinLimiter);
