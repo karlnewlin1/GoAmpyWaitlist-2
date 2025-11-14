@@ -1,0 +1,14 @@
+name: Bug Report
+description: Something isn't working
+title: "bug: "
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes: { label: What happened?, description: Steps to reproduce / expected vs actual }
+  - type: textarea
+    id: logs
+    attributes: { label: Logs, description: Redact PII; include request id if available }
+  - type: input
+    id: env
+    attributes: { label: Environment, placeholder: Replit / Local / Prod }

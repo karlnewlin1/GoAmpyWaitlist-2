@@ -1,0 +1,11 @@
+name: Feature Request
+description: Propose an enhancement
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: value
+    attributes: { label: Outcome, description: User value and acceptance criteria }
+  - type: textarea
+    id: plan
+    attributes: { label: Approach, description: Components/services touched; risks }
