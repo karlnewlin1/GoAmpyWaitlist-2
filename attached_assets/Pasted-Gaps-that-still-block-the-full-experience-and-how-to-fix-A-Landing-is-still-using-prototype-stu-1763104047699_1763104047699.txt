@@ -1,0 +1,324 @@
+Gaps that still block the “full” experience (and how to fix)
+A) Landing is still using prototype stubs (no real join call)
+
+In the Landing HTML, the 3‑step flow (Name → Email → Verify/Skip) ends by calling a stubbed saveToWaitlist() that doesn’t hit the BFF. Replace it so it actually calls POST /api/waitlist/join and shows the referral link inline (chat bubble) and/or in the console panel. This matches the intended UX from the prototype: after the short flow, surface the referral link inside the conversation.
+
+Copy‑paste (replace the current saveToWaitlist in Landing):
+
+<script>
+async function saveToWaitlist({ name, email, verified, points }) {
+  const ref = new URLSearchParams(location.search).get('ref') || undefined;
+  try {
+    const r = await fetch('/api/waitlist/join', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, email, ref })
+    });
+    if (!r.ok) throw new Error(`join failed: ${r.status}`);
+    const { referralLink } = await r.json();
+
+    // store for dashboard; show inline now
+    try { localStorage.setItem('goampy_referral_link', referralLink); } catch {}
+    showReferralLink(referralLink);
+  } catch (e) {
+    console.error('join error', e);
+  }
+}
+
+// Render referral link inline (uses dashboard’s referral card template if present)
+function showReferralLink(link) {
+  const cardTpl = document.getElementById('referralCardTemplate'); // present on dashboard
+  const targetList = document.getElementById('chatMessages');
+  if (cardTpl && targetList) {
+    const node = cardTpl.content.cloneNode(true);
+    const abs = new URL(link, location.origin).href;
+    node.querySelector('#refLink').textContent = abs;
+    node.querySelector('#copyRefBtn')?.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(abs); } catch {}
+      const hint = node.querySelector('#refHint'); if (hint) { hint.hidden = false; setTimeout(()=> hint.hidden = true, 2000); }
+    });
+    node.querySelector('#shareLiBtn')?.addEventListener('click', () => {
+      const url = `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(abs)}`;
+      window.open(url, '_blank', 'width=600,height=600') || (location.href = url);
+    });
+    targetList.appendChild(node);
+  } else {
+    // fallback: print in console
+    const t = document.getElementById('terminalContent');
+    if (t) { const div = document.createElement('div'); div.className='terminal-line green'; div.textContent=`> Referral: ${location.origin + link}`; t.appendChild(div); }
+  }
+}
+</script>
+
+
+Why: the prototype explicitly expects the short join to produce a link and keep the flow in one place.
+
+B) Dashboard/Tour scripts referenced in HTML must exist
+
+Both Dashboard and Tour load external scripts:
+
+Dashboard: ./scripts/dashboard.js (module)
+
+Tour: ./scripts/tour.js (module)
+
+If these files are missing, the browser throws a 404 and halts all JS, which can make the app “not working.” Until you wire the real behavior, add placeholders so the rest of the page runs:
+
+client/public/scripts/dashboard.js
+
+console.debug('[dashboard] mounted');
+const stored = localStorage.getItem('goampy_referral_link');
+if (stored) {
+  const abs = new URL(stored, location.origin).href;
+  if (typeof window.mountReferralCard === 'function') window.mountReferralCard(abs);
+}
+
+
+client/public/scripts/tour.js
+
+console.debug('[tour] mounted');
+// keep tour button-mode; dashboard opens when tour finishes (handled by inline code)
+
+
+Put your prototype assets/styles/scripts under client/public so Vite serves them at the root URL (e.g., /styles/main.css, /assets/*). This is consistent with the HTML references.
+
+C) Referral signup attribution and click logging
+
+You’re creating codes and redirecting—good. Two extra lines make the growth loop measureable:
+
+Log clicks when /r/:code is visited (server):
+
+Insert a referral_events row with { type:'click' } before redirect.
+
+You’ll use these to compute console stats.
+
+Credit signup when someone joins with ref:
+
+In /api/waitlist/join, if ref is valid, set waitlist_entries.referrer_user_id = owner.userId
+
+Also insert a referral_events row with { type:'signup', email }.
+
+This aligns with Dashboard’s mission “Get your first referral” and the stats chips.
+
+Server patches (drop‑in):
+server/src/index.ts
+
+import { db } from './lib/db.js';
+import { referralCodes, referralEvents } from './shared/schema.js';
+import { eq } from 'drizzle-orm';
+
+// ...
+app.get('/r/:code', async (req, res) => {
+  const { code } = req.params;
+  try {
+    const [rc] = await db.select().from(referralCodes).where(eq(referralCodes.code, code));
+    if (rc) await db.insert(referralEvents).values({ referralCodeId: rc.id, type: 'click' });
+  } catch {}
+  res.redirect(`/?ref=${encodeURIComponent(code)}`);
+});
+
+
+server/src/routes/waitlist.ts (inside the handler, before res.json)
+
+// If ref present, attribute signup to code owner
+if (ref) {
+  const [owner] = await db.select().from(referralCodes).where(eq(referralCodes.code, ref));
+  if (owner) {
+    try {
+      // mark who referred this user (idempotent)
+      await db.insert(waitlistEntries).values({
+        userId: u.id, source: 'referral', referrerUserId: owner.userId
+      });
+    } catch {}
+    await db.insert(referralEvents).values({
+      referralCodeId: owner.id, type: 'signup', email
+    });
+  }
+}
+
+D) Case‑insensitive emails (avoid dupes: “User@x” vs “user@x”)
+
+Use a lowercased email column for uniqueness + store the display email separately. This prevents duplicate users and strange code collisions.
+
+Schema change (Drizzle): add emailCi and unique index; optionally emailVerifiedAt for +20 later.
+
+export const users = pgTable('users', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email').notNull(),          // display
+  emailCi: text('email_ci').notNull(),     // lowercased for uniq
+  name: text('name'),
+  emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow()
+}, (t) => ({ ux_email_ci: uniqueIndex('ux_users_email_ci').on(t.emailCi) }));
+
+
+Join route: look up/insert by emailCi (i.e., email.trim().toLowerCase()).
+
+Migrate:
+
+npm --workspace server run db:gen
+NODE_OPTIONS=--dns-result-order=ipv4first npm --workspace server run db:push \
+ || NODE_OPTIONS=--dns-result-order=ipv6first npm --workspace server run db:push
+# (or run the generated SQL in Supabase once)
+
+E) Pooler setting (prepare:false) to avoid odd query failures
+
+You’re on the Supabase pooler (6543). Set prepare:false in the postgres client:
+
+server/src/lib/db.ts
+
+const client = postgres(process.env.DATABASE_URL!, {
+  ssl: 'require',
+  max: 1,
+  prepare: false, // IMPORTANT when using Supabase Pooler (6543)
+});
+
+F) Ports & proxy: pick one and document it
+
+Your note says client on 5000. That’s fine—just keep it consistent.
+
+client/vite.config.ts
+
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5000,                 // <— keep 5000 if that’s what you’re using
+    proxy: { '/api': 'http://localhost:5177', '/r': 'http://localhost:5177' }
+  }
+});
+
+
+In Replit, “Run” should execute npm run dev at repo root (starts both). Kill stragglers first if you ever see EADDRINUSE:
+
+pkill -f "tsx watch" || true
+pkill -f "vite" || true
+
+G) Observability & DX (fast wins)
+
+Add request logging so you can see payloads and latency in the console:
+
+npm --workspace server i pino-http
+
+// server/src/index.ts
+import pinoHttp from 'pino-http';
+app.use(pinoHttp());
+
+
+Add a richer health endpoint to check DB reachability:
+
+app.get('/api/health', async (_req, res) => {
+  try { await db.execute(sql`select 1`); res.json({ ok: true, db: 'ok' }); }
+  catch { res.status(500).json({ ok: false, db: 'fail' }); }
+});
+
+
+Standardize error responses from the BFF as { error, code } so the client can show helpful copy.
+
+H) UX parity with the spec (quick checks)
+
+Landing: 3‑step flow, CTA shows rewards under it, referral link rendered inline after join.
+
+Tour: chat input disabled; button‑driven; progress bar + “How Priority Works” + “Rewards Preview”; mobile pills to switch Chat/Console.
+
+Dashboard: mission “Get your first referral,” stats + leaders; ability to render referral card inline in chat (we now do via localStorage on load).
+
+Copy‑paste “Fix Pack” (server & client)
+
+Run these from the repo root. Safe to re‑run.
+
+1) Server: click + signup attribution & pooler setting
+
+applypatch <<'PATCH'
+*** Begin Patch
+*** Update File: server/src/lib/db.ts
+@@
+-const client = postgres(process.env.DATABASE_URL!, {
+-  ssl: 'require',
+-  max: 1,
+-  // prepare: false, // uncomment if using Pooler (6543)
+-});
++const client = postgres(process.env.DATABASE_URL!, {
++  ssl: 'require',
++  max: 1,
++  prepare: false, // using Supabase Pooler (6543)
++});
+ export const db = drizzle(client, { schema });
+*** End Patch
+PATCH
+
+applypatch <<'PATCH'
+*** Begin Patch
+*** Update File: server/src/index.ts
+@@
+-app.get('/r/:code', (req, res) => {
+-  res.redirect(`/?ref=${encodeURIComponent(req.params.code)}`);
+-});
++import { db } from './lib/db.js';
++import { referralCodes, referralEvents } from './shared/schema.js';
++import { eq } from 'drizzle-orm';
++app.get('/r/:code', async (req, res) => {
++  const { code } = req.params;
++  try {
++    const [rc] = await db.select().from(referralCodes).where(eq(referralCodes.code, code));
++    if (rc) await db.insert(referralEvents).values({ referralCodeId: rc.id, type: 'click' });
++  } catch {}
++  res.redirect(`/?ref=${encodeURIComponent(code)}`);
++});
+*** End Patch
+PATCH
+
+
+2) Client: ensure dashboard/tour scripts exist
+
+mkdir -p client/public/scripts
+cat > client/public/scripts/dashboard.js <<'JS'
+console.debug('[dashboard] mounted');
+const stored = localStorage.getItem('goampy_referral_link');
+if (stored && typeof window.mountReferralCard === 'function') {
+  const abs = new URL(stored, location.origin).href;
+  window.mountReferralCard(abs);
+}
+JS
+
+cat > client/public/scripts/tour.js <<'JS'
+console.debug('[tour] mounted');
+JS
+
+
+3) Client: if you’re using port 5000, lock it in Vite
+
+cat > client/vite.config.ts <<'TS'
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+export default defineConfig({
+  plugins: [react()],
+  server: { port: 5000, proxy: { '/api': 'http://localhost:5177', '/r': 'http://localhost:5177' } }
+});
+TS
+
+
+Then replace the Landing saveToWaitlist() with the implementation above (Section A).
+
+Verification plan (5 minutes)
+
+Server logs show BFF on :5177 and request logs for /api/waitlist/join.
+
+Landing: run the 3‑step flow → referral link appears inline in chat or in the console panel.
+
+Open the referral link → you should see redirect to /?ref= and a referral_events.click row.
+
+Join with ?ref=... on the Landing URL → you should see a referral_events.signup row and waitlist_entries.referrer_user_id populated.
+
+Dashboard loads and (if a link is in localStorage) renders the referral card inline.
+
+Tour still shows disabled chat & button flow with progress and previews.
+
+Next 2 fast moves (after green)
+
+Points summary endpoint (/api/me/summary): compute +10 onboarding, +20 verified (once we actually verify), +10 per referral_events.signup and return { points, referrals, rank } for the chips on Dashboard/Tour.
+
+Email verification (Supabase OTP / Magic Link): when verified, set users.email_verified_at and award +20; Dashboard reflects that immediately.
+
+If you apply the patches above and still hit anything weird, paste the exact error/console line and I’ll give you a one‑liner fix.
