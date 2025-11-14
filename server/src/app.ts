@@ -13,6 +13,8 @@ import events from './routes/events.js';
 import me from './routes/me.js';
 import share from './routes/share.js';
 import redirects from './routes/redirects.js';
+import leaderboard from './routes/leaderboard.js';
+import auth from './routes/auth.js';
 
 export function createApp() {
   const app = express();
@@ -48,6 +50,8 @@ export function createApp() {
   
   app.use('/api/events', events);
   app.use('/api/me', me);
+  app.use('/api/leaderboard', leaderboard);
+  app.use('/api/auth', auth);
   app.use('/share', share);
   app.use('/', redirects); // /r/:code routes
 
