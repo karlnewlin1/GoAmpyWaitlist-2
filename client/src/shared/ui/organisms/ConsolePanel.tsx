@@ -4,12 +4,15 @@ import { Card } from '@/components/ui/card';
 export function ConsolePanel() {
   const [referralLink, setReferralLink] = useState('');
   const [signupCount, setSignupCount] = useState(0);
-  const [points, setPoints] = useState(100);
+  const [points, setPoints] = useState(0);
+  const [isVerified, setIsVerified] = useState(false);
 
   useEffect(() => {
     // Listen for referral link generation
     const handleReferralLink = async (event: CustomEvent) => {
       setReferralLink(event.detail.referralLink);
+      if (event.detail.points) setPoints(event.detail.points);
+      if (event.detail.verified !== undefined) setIsVerified(event.detail.verified);
       
       // Fetch user stats after signup
       const email = localStorage.getItem('goampy_email');
@@ -19,13 +22,32 @@ export function ConsolePanel() {
           if (response.ok) {
             const data = await response.json();
             setSignupCount(data.referrals || 0);
-            setPoints(data.points || 100);
+            setPoints(data.points || 0);
           }
         } catch {}
       }
     };
+    
+    // Listen for email verification
+    const handleEmailVerified = async (event: CustomEvent) => {
+      if (event.detail.verified) {
+        setIsVerified(true);
+        // Refetch user stats to get updated points
+        const email = localStorage.getItem('goampy_email');
+        if (email) {
+          try {
+            const response = await fetch(`/api/me/summary?email=${encodeURIComponent(email)}`);
+            if (response.ok) {
+              const data = await response.json();
+              setPoints(data.points || 0);
+            }
+          } catch {}
+        }
+      }
+    };
 
     window.addEventListener('referralLinkGenerated', handleReferralLink as any);
+    window.addEventListener('emailVerified', handleEmailVerified as any);
 
     // Check localStorage for existing link and fetch stats
     const stored = localStorage.getItem('goampy_referral_link');
@@ -47,6 +69,7 @@ export function ConsolePanel() {
 
     return () => {
       window.removeEventListener('referralLinkGenerated', handleReferralLink as any);
+      window.removeEventListener('emailVerified', handleEmailVerified as any);
     };
   }, []);
 

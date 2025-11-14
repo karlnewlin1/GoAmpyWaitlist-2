@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 
-type Step = 'name' | 'email' | 'complete';
+type Step = 'name' | 'email' | 'verify' | 'complete';
 
 export function ChatPanel() {
   const [step, setStep] = useState<Step>('name');
@@ -11,6 +11,10 @@ export function ChatPanel() {
   const [email, setEmail] = useState('');
   const [referralLink, setReferralLink] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [isVerified, setIsVerified] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpError, setOtpError] = useState('');
 
   const handleNameSubmit = () => {
     if (name.trim().length >= 2) {
@@ -42,18 +46,80 @@ export function ChatPanel() {
         localStorage.setItem('goampy_referral_link', fullLink);
         localStorage.setItem('goampy_email', email);
         
-        // Dispatch event for ConsolePanel
+        // Dispatch event for ConsolePanel (with initial 10 points)
         window.dispatchEvent(new CustomEvent('referralLinkGenerated', { 
-          detail: { referralLink: fullLink } 
+          detail: { referralLink: fullLink, points: 10, verified: false } 
         }));
         
-        setStep('complete');
+        // Move to verification step
+        setStep('verify');
+        // Automatically send OTP
+        await sendOtp();
       }
     } catch (error) {
       console.error('Error joining waitlist:', error);
     } finally {
       setIsLoading(false);
     }
+  };
+  
+  const sendOtp = async () => {
+    setIsLoading(true);
+    setOtpError('');
+    try {
+      const response = await fetch('/api/auth/otp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+
+      if (response.ok) {
+        setOtpSent(true);
+      } else {
+        const error = await response.json();
+        setOtpError(error?.error?.message || 'Failed to send code');
+      }
+    } catch (error) {
+      setOtpError('Failed to send verification code');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  const verifyOtp = async () => {
+    if (otpCode.length < 6) return;
+    
+    setIsLoading(true);
+    setOtpError('');
+    try {
+      const response = await fetch('/api/auth/otp/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, code: otpCode })
+      });
+
+      if (response.ok) {
+        setIsVerified(true);
+        
+        // Update ConsolePanel with +20 verified points
+        window.dispatchEvent(new CustomEvent('emailVerified', { 
+          detail: { verified: true, additionalPoints: 20 } 
+        }));
+        
+        setStep('complete');
+      } else {
+        const error = await response.json();
+        setOtpError(error?.error?.message || 'Invalid code');
+      }
+    } catch (error) {
+      setOtpError('Verification failed');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  const skipVerification = () => {
+    setStep('complete');
   };
 
   const copyToClipboard = () => {
@@ -124,6 +190,67 @@ export function ChatPanel() {
             </Card>
           </>
         )}
+        
+        {step === 'verify' && (
+          <>
+            <div className="self-end bg-white/10 rounded-lg p-3 ml-auto max-w-[200px]">
+              <p className="text-sm">{email}</p>
+            </div>
+            
+            <Card className="p-4 bg-white/5 border-white/10">
+              <p className="text-sm mb-3">
+                🎉 You're in! Want to verify your email for +20 bonus points?
+              </p>
+              {otpSent && (
+                <p className="text-xs text-green-400 mb-3">
+                  ✓ Verification code sent to {email}
+                </p>
+              )}
+              {otpError && (
+                <p className="text-xs text-red-400 mb-3">
+                  {otpError}
+                </p>
+              )}
+              <Input
+                value={otpCode}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setOtpCode(e.target.value)}
+                placeholder="Enter 6-digit code"
+                maxLength={6}
+                className="mb-2 bg-white/10 border-white/20 text-white placeholder:text-white/50"
+                onKeyDown={(e: React.KeyboardEvent) => e.key === 'Enter' && verifyOtp()}
+                data-testid="input-otp"
+              />
+              <div className="flex gap-2 mb-2">
+                <Button 
+                  onClick={verifyOtp}
+                  disabled={otpCode.length < 6 || isLoading}
+                  className="flex-1"
+                  data-testid="button-verify-otp"
+                >
+                  {isLoading ? 'Verifying...' : 'Verify (+20 pts)'}
+                </Button>
+                <Button 
+                  onClick={skipVerification}
+                  variant="secondary"
+                  className="flex-1"
+                  data-testid="button-skip-verify"
+                >
+                  Skip for now
+                </Button>
+              </div>
+              <Button 
+                onClick={sendOtp}
+                variant="ghost"
+                size="sm"
+                className="w-full text-xs"
+                disabled={isLoading}
+                data-testid="button-resend-otp"
+              >
+                Resend code
+              </Button>
+            </Card>
+          </>
+        )}
 
         {step === 'complete' && (
           <>
@@ -132,7 +259,9 @@ export function ChatPanel() {
             </div>
             
             <Card className="p-4 bg-white/5 border-white/10">
-              <p className="text-sm mb-3">🎉 You're in! Here's your personal referral link:</p>
+              <p className="text-sm mb-3">
+                🎉 You're in! {isVerified && '✅ Email verified (+20 pts)! '}Here's your personal referral link:
+              </p>
               <div className="flex gap-2 mb-3">
                 <Input
                   value={referralLink}
