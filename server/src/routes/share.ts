@@ -2,12 +2,12 @@ import { Router } from 'express';
 import { db } from '../lib/db.js';
 import { referralCodes, users } from '../shared/schema.js';
 import { eq } from 'drizzle-orm';
-import { referralService } from '../services/referral.js';
+import { normCode } from '../services/referral.js';
 
 const r = Router();
 
 r.get('/:code', async (req, res) => {
-  const code = referralService.normCode(req.params.code);
+  const code = normCode(req.params.code);
   
   // Look up the referral code owner with a single join
   const [rc] = await db.select({
