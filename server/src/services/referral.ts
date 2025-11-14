@@ -12,12 +12,13 @@ export const normCode = (s: string) => (s || '').toLowerCase().trim();
 
 /**
  * Generate a strong referral code using slugified username + random suffix
- * Example: "john-doe-X7Q3VG"
+ * Example: "john-doe-x7q3vg" (always lowercase for consistent lookups)
  */
 export function makeReferralCode(email: string): string {
   const username = email.split('@')[0] || 'user';
   const slug = slugify(username, { lower: true, strict: true }).slice(0, 20);
-  return `${slug}-${nanoid()}`;
+  const suffix = nanoid().toLowerCase();
+  return `${slug}-${suffix}`;
 }
 
 export class ReferralService {
@@ -48,7 +49,7 @@ export class ReferralService {
     
     // Extremely unlikely fallback - use pure random
     if (!code) {
-      const fallback = `user-${nanoid()}${nanoid()}`;
+      const fallback = `user-${nanoid()}${nanoid()}`.toLowerCase();
       const [result] = await tx.insert(referralCodes).values({
         userId,
         code: fallback
