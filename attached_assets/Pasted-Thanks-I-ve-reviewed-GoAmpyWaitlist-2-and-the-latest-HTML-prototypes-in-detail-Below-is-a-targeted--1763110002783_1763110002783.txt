@@ -1,0 +1,248 @@
+Thanks—I've reviewed GoAmpyWaitlist‑2 and the latest HTML prototypes in detail. Below is a targeted, actionable review with copy‑paste fixes. Where I reference specific files/behaviors, I cite the exact source so the dev knows what I’m looking at.
+
+What’s solid
+
+Flows match the spec: Landing = 3‑step chat, Tour = button‑only with progress, Dashboard = chat + mission/console split.
+
+Good a11y foundations: ARIA roles on chat logs, sr‑only for error announcements, focus‑trap in the leaderboard modal.
+
+Repository has the right “buckets”: client/, server/, shared/, plus docs/CI scaffolding noted in README. (I can see top‑level files & folders on GitHub.) 
+GitHub
+
+High‑priority gaps to close (and how)
+1) Config drift (root vs package configs)
+
+Risk: having vite.config.ts, tailwind.config.ts, and drizzle.config.ts at the repo root can cause tools to scan the wrong paths (or “work by accident” locally and fail elsewhere). The GitHub listing shows root‑level configs exist. 
+GitHub
+
+Fix (copy‑paste in shell):
+
+# From repo root
+git mv -f vite.config.ts client/vite.config.ts || true
+git mv -f tailwind.config.ts client/tailwind.config.ts || true
+git mv -f drizzle.config.ts server/drizzle.config.ts || true
+
+
+Ensure correct content:
+
+client/vite.config.ts
+
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig(async () => ({
+  plugins: [react()],
+  server: {
+    port: 5000,
+    proxy: {
+      '/api': 'http://localhost:5177',
+      '/r': 'http://localhost:5177',
+      '/share': 'http://localhost:5177'
+    }
+  }
+}));
+
+
+client/tailwind.config.ts
+
+import type { Config } from 'tailwindcss';
+export default {
+  content: ['src/**/*.{ts,tsx,html}'],
+  theme: { extend: {} },
+  plugins: []
+} satisfies Config;
+
+
+server/drizzle.config.ts
+
+import 'dotenv/config';
+export default {
+  schema: './src/shared/schema.ts',
+  out: './drizzle',
+  dialect: 'postgresql',
+  dbCredentials: { url: process.env.DATABASE_URL! }
+};
+
+
+server/package.json (scripts)
+
+{
+  "scripts": {
+    "dev": "BFF_PORT=5177 tsx watch src/index.ts",
+    "db:gen": "drizzle-kit generate --config=drizzle.config.ts",
+    "db:push": "drizzle-kit push --config=drizzle.config.ts"
+  }
+}
+
+2) Landing page: wire the real APIs + fix a couple of JS nits
+
+The Landing flow is well structured (3 steps, OTP, skip path), but several functions are stubs and there are a couple of clean‑ups to avoid subtle bugs.
+
+A) Implement API calls
+
+Replace the three TODO stubs (sendOtp, verifyOtp, saveToWaitlist) with real fetches:
+
+<script>
+  async function sendOtp(email) {
+    const r = await fetch('/api/auth/otp/send', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    if (!r.ok) throw new Error('otp_send_failed');
+    return true;
+  }
+
+  async function verifyOtp(email, code) {
+    const r = await fetch('/api/auth/otp/verify', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, code })
+    });
+    if (!r.ok) return false;
+    const res = await r.json();
+    return !!res.verified;
+  }
+
+  async function saveToWaitlist({ name, email, verified }) {
+    // pass ref param if present
+    const qp = new URLSearchParams(location.search);
+    const ref = qp.get('ref') || undefined;
+
+    const r = await fetch('/api/waitlist/join', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, email, ref })
+    });
+    if (!r.ok) throw new Error('waitlist_join_failed');
+    const res = await r.json();
+    // Persist server-issued code for Dashboard
+    localStorage.setItem('ampy_referral_code', res.referral?.code || '');
+    return res;
+  }
+</script>
+
+
+(These align to the endpoints your README advertises.) 
+GitHub
+
+B) Fix undeclared variable + missing resize handle
+
+At the bottom of index.html, I see showCTA = true; but no declaration—this creates a global implicitly. Declare it once near your state block:
+let showCTA = false;
+
+The script initializes a desktop resize handler via initializeResize() and queries #resizeHandle, but that element isn’t in the DOM on Landing. Either add a handle element or guard the initializer to skip when absent.
+
+C) OTP sync without replacing DOM nodes
+
+Your wireOtpSync(true) currently calls replaceWith(cloneNode(true)) to drop listeners, which can also remove other handlers bound elsewhere. Prefer adding/removing named listeners:
+
+// Keep references so we can remove later
+function wireOtpSync(enable = true){
+  const chat = document.getElementById('messageInput');
+  const otp  = document.getElementById('otpInput');
+  if (!chat || !otp) return;
+
+  const onOtpInput = () => { /* mirror to chat, call handleOtpEntry when 6 digits */ };
+  const onChatInput = () => { /* mirror to otp during otp mode */ };
+
+  if (enable) {
+    otp.addEventListener('input', onOtpInput);
+    chat.addEventListener('input', onChatInput);
+    // store for cleanup
+    otp._onInput = onOtpInput;
+    chat._onInput = onChatInput;
+  } else {
+    if (otp._onInput)  otp.removeEventListener('input', otp._onInput);
+    if (chat._onInput) chat.removeEventListener('input', chat._onInput);
+  }
+}
+
+
+3) Dashboard: get the live referral link + use /share/:code
+
+The dashboard referral card currently uses a hard‑coded example (https://goampy.com/join/SARAH2024) and shares via LinkedIn’s generic share URL. Wire it to the backend and prefer our /share/:code route so OG previews show the referrer’s name.
+
+Replace mountReferralCard implementation (snippet):
+
+async function mountReferralCardFromServer() {
+  const r = await fetch('/api/me/summary', { credentials: 'include' });
+  const { referral, points, rank } = await r.json();
+  const code = referral?.code || localStorage.getItem('ampy_referral_code') || '';
+  const link = code ? `${location.origin}/r/${code}` : '';
+
+  // existing mount function, but use our link
+  mountReferralCard(link);
+
+  // Also wire share to /share/:code for OG cards
+  document.getElementById('shareLiBtn')?.addEventListener('click', () => {
+    const shareUrl = `${location.origin}/share/${code}`;
+    const w = window.open(shareUrl, '_blank', 'width=600,height=600');
+    if (!w) location.href = shareUrl;
+  });
+}
+window.addEventListener('DOMContentLoaded', mountReferralCardFromServer);
+
+
+(Your dashboard already has the referral card template & copy button; we’re just sourcing real data now.)
+
+4) Tour: progress + adaptive steps are correct; just ensure finish navigation
+
+The Tour disables chat and drives the flow with buttons (good), adapts steps if verified, and persists progress in localStorage. Confirm the final step always routes to Dashboard (or back to Landing if not logged in), and that the progress bar CSS variable --pct is used in tour.css.
+
+5) Security & observability deltas on the BFF (quick audit)
+
+Even though I can’t expand server files in the GitHub UI right now, the README advertises endpoints and a services‑layer BFF. Please ensure these are in place:
+
+Pino HTTP with redaction of authorization, cookie, and req.body.email, and no response body logging in prod.
+
+Helmet (CSP tuned later) + CORS allowlist from APP_ORIGIN.
+
+Rate‑limit /api/waitlist/join and /api/auth/* (60 / 15min).
+
+DB client uses Supabase pooler URL, ssl: 'require', max: 5 connections.
+
+(These are quick wins that align with what we’ve been enforcing.)
+
+6) Leaderboard & Mission Board (tiny server + client additions)
+
+Leaderboard endpoint: GET /api/leaderboard/top?limit=20. Cache results in memory for 60s. Rank by points DESC, createdAt ASC.
+
+Mission board (choose‑your‑own‑adventure): GET /api/dashboard/choices returns an array of tasks based on state (verified, hasCode, refCount). Client renders chips/buttons under the Mission card. The Dashboard markup already has a “Mission” card—the API response just needs to drive its content.
+
+If you want, I’ll drop in the exact server route + a minimal TS type and a client renderChoices() snippet as a ready‑to‑merge block.
+
+Quick acceptance checklist (run locally)
+# Migrations read server-local drizzle config
+npm --workspace server run db:gen && npm --workspace server run db:push
+
+# Health & summary
+curl -s http://localhost:5177/api/health | jq .
+curl -s "http://localhost:5177/api/me/summary?email=ada@example.com" | jq .
+
+# Join idempotency (same email twice returns same user/code)
+curl -s -X POST http://localhost:5177/api/waitlist/join \
+  -H 'content-type: application/json' \
+  -d '{"name":"Ada","email":"ada@example.com"}' | jq .
+curl -s -X POST http://localhost:5177/api/waitlist/join \
+  -H 'content-type: application/json' \
+  -d '{"name":"Ada","email":"ada@example.com"}' | jq .
+
+# Referral redirect logs click → 302
+# (replace CODE with Ada's code from response)
+curl -I http://localhost:5177/r/CODE | head -n 10
+
+Tiny UI polish backlog (fast)
+
+Landing mobile tabs: add role="tablist"/role="tab" and aria-controls consistently (Tour has it; Landing partially does).
+
+Announce stat changes in Console with aria-live="polite" (points/rank chips). You already do this in places—make it consistent.
+
+Use /share/:code everywhere (Dashboard, Landing’s referral card), not the LinkedIn offsite sharer, to get our OG tags.
+
+What I looked at
+
+Repo listing & README for structure, configs, and endpoints. 
+GitHub
+
+HTML prototypes for Landing, Tour, Dashboard to align UX and find front‑end issues/anchors.
