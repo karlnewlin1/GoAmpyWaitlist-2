@@ -1,0 +1,2 @@
+# Dashboard (Mission Control)
+Mission: **Get your first referral**; render referral card on mount (localStorage/API). Leaders list + modal with focus trap; stats chips from `/api/me/summary`. Share buttons use `/share/<code>` for rich OG unfurls.

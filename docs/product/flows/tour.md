@@ -1,0 +1,2 @@
+# Tour (Orientation Mode)
+Same split layout, but **chat is disabled**. Steps are button‑driven with progress, "How Priority Works", and "Rewards Preview". Finish writes `next_action` and navigates to Dashboard.
