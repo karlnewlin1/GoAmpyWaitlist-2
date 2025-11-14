@@ -1,0 +1,349 @@
+Perfect—here’s a copy‑pasteable brief you can give the Replit developer. It’s precise, sequenced, and ends with a clear “Definition of Done”. The end result preserves your split Chat (left) / Mission Control (right) layout and the join→referral flow you designed in your HTML prototypes.
+
+GoAmpy Waitlist – Replit Stabilization Instructions
+Goal
+
+Get the dev environment green on Replit:
+
+Client (Vite/React) running at 5176
+
+BFF (Express) running at 5177
+
+Supabase schema applied (Drizzle)
+
+/api/health, /api/waitlist/join, /r/:code, /api/events all respond
+
+Right‑panel form returns a referral link, /r/:code redirects to /?ref=…
+
+This matches our split Chat/Console shells and the onboarding → referral flow from the prototype.
+
+0) Single process manager & kill stragglers
+
+Actions (Shell):
+
+# Stop anything leftover
+pkill -f "tsx watch" || true
+pkill -f "vite" || true
+
+# Ensure root package.json uses npm workspaces and runs both apps
+node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.name='goampy';p.private=true;p.workspaces=['client','server'];p.scripts={dev:'concurrently -k -n server,client -c magenta,cyan \"npm --workspace server run dev\" \"npm --workspace client run dev\"',build:'npm --workspace client run build && npm --workspace server run build'};fs.writeFileSync('package.json',JSON.stringify(p,null,2));console.log('root workspaces ready');"
+
+# Install at root (ensures lockfile and deps are clean)
+npm i -D concurrently
+npm install
+
+
+Replit “Run” button: set to run npm run dev (root), not separate server.
+Why: avoids port collisions (EADDRINUSE) we saw earlier.
+
+1) Server: deps & ports
+
+Install (Shell):
+
+cd server
+npm i express cors helmet zod dotenv
+npm i -D typescript tsx @types/node @types/express @types/cors
+cd ..
+
+
+Replace file: server/src/index.ts
+
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+
+const app = express();
+app.use(helmet());
+app.use(cors());
+app.use(express.json());
+
+// Healthcheck
+app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
+// Referral redirect (click logging added later)
+app.get('/r/:code', (req, res) => {
+  res.redirect(`/?ref=${encodeURIComponent(req.params.code)}`);
+});
+
+// Bind explicitly to avoid Replit's default PORT=5000
+const port = Number(process.env.BFF_PORT || 5177);
+app.listen(port, () => console.log(`BFF on :${port}`));
+
+
+Server script: set dev port
+
+node -e "const fs=require('fs');const p=require('./server/package.json');p.scripts=p.scripts||{};p.scripts.dev='BFF_PORT=5177 tsx watch src/index.ts';fs.writeFileSync('./server/package.json',JSON.stringify(p,null,2));console.log('server dev -> :5177');"
+
+2) Client: Vite config (no stray heredoc)
+
+Replace file: client/vite.config.ts
+
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5176,
+    proxy: {
+      '/api': 'http://localhost:5177',
+      '/r':   'http://localhost:5177'
+    }
+  }
+});
+
+
+Ensure there is no cat <<'TS' or any shell text in this file. It must be plain TypeScript.
+This keeps the split layout UX consistent with the HTML reference (chat left, console right).
+
+3) API routes for the join flow
+
+Create server/src/routes/waitlist.ts
+
+import { Router } from 'express';
+import { z } from 'zod';
+import { db } from '../lib/db.js';
+import { users, waitlistEntries, referralCodes, events } from '../shared/schema.js';
+import { eq } from 'drizzle-orm';
+
+const r = Router();
+const Body = z.object({
+  name: z.string().min(2),
+  email: z.string().email(),
+  ref: z.string().optional().nullable()
+});
+const codeFrom = (s: string) =>
+  (s.split('@')[0] || 'user').toLowerCase().replace(/[^a-z0-9]+/g,'').slice(0,12) || 'user';
+
+r.post('/join', async (req, res) => {
+  const { name, email, ref } = Body.parse(req.body);
+
+  const [u0] = await db.select().from(users).where(eq(users.email, email));
+  const u = u0 ?? (await db.insert(users).values({ email, name }).returning())[0];
+
+  const [wl] = await db.select().from(waitlistEntries).where(eq(waitlistEntries.userId, u.id));
+  if (!wl) await db.insert(waitlistEntries).values({ userId: u.id, source: ref ? 'referral' : 'direct' });
+
+  const [rc0] = await db.select().from(referralCodes).where(eq(referralCodes.userId, u.id));
+  const code = rc0?.code ?? (await db.insert(referralCodes).values({ userId: u.id, code: codeFrom(email) }).returning())[0].code;
+
+  await db.insert(events).values({ userId: u.id, eventName: 'onboarding_completed', payload: { ref: ref ?? null } });
+  res.json({ referralLink: `/r/${code}` });
+});
+
+export default r;
+
+
+Create server/src/routes/events.ts
+
+import { Router } from 'express';
+import { db } from '../lib/db.js';
+import { events } from '../shared/schema.js';
+
+const r = Router();
+r.post('/', async (req, res) => {
+  const { event, payload, userId } = req.body ?? {};
+  if (!event) return res.status(400).json({ error: 'event required' });
+  await db.insert(events).values({ eventName: String(event), payload: payload ?? null, userId: userId ?? null });
+  res.status(204).end();
+});
+export default r;
+
+
+Mount routes – edit server/src/index.ts to add:
+
+import waitlist from './routes/waitlist.js';
+import events from './routes/events.js';
+
+app.use('/api/waitlist', waitlist);
+app.use('/api/events', events);
+
+4) Database (Drizzle + Supabase)
+
+Create schema: server/src/shared/schema.ts
+(Overwrite if it already exists; ensure no shell text is inside)
+
+import { pgTable, uuid, text, timestamp, jsonb, uniqueIndex } from 'drizzle-orm/pg-core';
+
+export const users = pgTable('users', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email').notNull(),
+  name: text('name'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow()
+}, (t) => ({ ux_email: uniqueIndex('ux_users_email').on(t.email) }));
+
+export const waitlistEntries = pgTable('waitlist_entries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull(),
+  source: text('source').$type<'direct'|'referral'|'campaign'>().default('direct'),
+  referrerUserId: uuid('referrer_user_id'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow()
+}, (t) => ({ ux_user: uniqueIndex('ux_waitlist_user').on(t.userId) }));
+
+export const referralCodes = pgTable('referral_codes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull(),
+  code: text('code').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow()
+}, (t) => ({
+  ux_user: uniqueIndex('ux_referral_user').on(t.userId),
+  ux_code: uniqueIndex('ux_referral_code').on(t.code)
+}));
+
+export const referralEvents = pgTable('referral_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  referralCodeId: uuid('referral_code_id').notNull(),
+  type: text('type').$type<'click'|'signup'>().notNull(),
+  email: text('email'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow()
+});
+
+export const events = pgTable('events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id'),
+  eventName: text('event_name').notNull(),
+  payload: jsonb('payload'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow()
+});
+
+
+DB client: server/src/lib/db.ts
+
+import postgres from 'postgres';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import * as schema from '../shared/schema.js';
+
+const client = postgres(process.env.DATABASE_URL!, {
+  ssl: 'require',
+  max: 1,
+  // If you decide to use Supabase Pooler (port 6543), uncomment:
+  // prepare: false,
+});
+export const db = drizzle(client, { schema });
+
+
+Drizzle config (CommonJS to avoid ESM “require is not defined” issues):
+server/drizzle.config.cjs
+
+require('dotenv').config();
+const path = require('path');
+
+module.exports = {
+  schema: path.join(__dirname, 'src', 'shared', 'schema.ts'),
+  out: path.join(__dirname, 'drizzle'),
+  dialect: 'postgresql',
+  dbCredentials: { url: process.env.DATABASE_URL }
+};
+
+
+Update scripts (server/package.json):
+
+node -e "const fs=require('fs');const p=require('./server/package.json');p.scripts=p.scripts||{};p.scripts['db:gen']='drizzle-kit generate --config=drizzle.config.cjs';p.scripts['db:push']='drizzle-kit push --config=drizzle.config.cjs';fs.writeFileSync('./server/package.json',JSON.stringify(p,null,2));console.log('drizzle scripts set');"
+
+
+Install Drizzle libs:
+
+cd server
+npm i drizzle-orm drizzle-kit postgres
+cd ..
+
+5) Secrets (Replit → Tools → Secrets)
+
+Add/confirm these keys:
+
+SUPABASE_URL= https://<PROJECT_REF>.supabase.co
+SUPABASE_ANON_KEY= <anon key>
+SUPABASE_SERVICE_ROLE_KEY= <service role key>
+DATABASE_URL= postgresql://postgres:<DB_PASSWORD>@db.<PROJECT_REF>.supabase.co:5432/postgres?sslmode=require
+
+
+If drizzle-kit push has DNS issues on Replit, switch to the Pooling URI (Settings → Database → Connection pooling, port 6543) and set prepare:false in server/src/lib/db.ts as noted.
+
+6) Migrations
+
+Run from repo root (clean terminal):
+
+pkill -f "tsx watch" || true
+pkill -f "vite" || true
+
+npm --workspace server run db:gen
+# Prefer IPv4 first; if it fails, try ipv6first
+NODE_OPTIONS=--dns-result-order=ipv4first npm --workspace server run db:push \
+|| NODE_OPTIONS=--dns-result-order=ipv6first npm --workspace server run db:push
+
+
+Fallbacks if push still fails:
+
+Use Supabase SQL Editor and paste the contents of server/drizzle/0000_*.sql.
+
+Or run this tiny migrator (guaranteed):
+
+cat > server/scripts/migrate.ts <<'TS'
+import 'dotenv/config';
+import fs from 'fs'; import path from 'path'; import postgres from 'postgres';
+async function main(){
+  const url = process.env.DATABASE_URL; if(!url) throw new Error('DATABASE_URL missing');
+  const sql = postgres(url, { ssl: 'require', max: 1 /* if pooler: add prepare:false */});
+  const dir = path.resolve(process.cwd(), 'server', 'drizzle');
+  const files = fs.readdirSync(dir).filter(f=>f.endsWith('.sql')).sort();
+  for (const f of files){ console.log('Applying', f); await sql.unsafe(fs.readFileSync(path.join(dir,f),'utf8')); }
+  await sql.end(); console.log('Applied', files.length, 'migration file(s).');
+} main().catch(e=>{console.error(e);process.exit(1);});
+TS
+node -e "const fs=require('fs');const p=require('./server/package.json');p.scripts=p.scripts||{};p.scripts['db:migrate']='tsx scripts/migrate.ts';fs.writeFileSync('./server/package.json',JSON.stringify(p,null,2));"
+npm --workspace server run db:migrate
+
+7) Start & test
+
+Start both apps:
+
+npm run dev
+
+
+Expected logs
+
+[server] BFF on :5177
+
+[client] Local: http://localhost:5176/
+
+Smoke tests
+
+Open the Vite URL → you should see Chat (left) + Mission Control (right) shells.
+
+In the same tab, open /api/health → {"ok":true}.
+
+In the right panel (Join Beta form), submit name + email → receive referral link like /r/abc123.
+
+Open /r/abc123 → redirects to /?ref=abc123.
+
+(Tour and dashboard scafolds remain aligned with the prototypes and will be fleshed out next.)
+
+(Optional) Click logging on referrals
+
+If you want click events recorded now, replace the /r/:code handler with DB logging:
+
+import { db } from './lib/db.js';
+import { referralCodes, referralEvents } from './shared/schema.js';
+import { eq } from 'drizzle-orm';
+
+app.get('/r/:code', async (req, res) => {
+  const { code } = req.params;
+  const [rc] = await db.select().from(referralCodes).where(eq(referralCodes.code, code));
+  if (rc) await db.insert(referralEvents).values({ referralCodeId: rc.id, type: 'click' });
+  res.redirect(`/?ref=${encodeURIComponent(code)}`);
+});
+
+Definition of Done (acceptance)
+
+ npm run dev from root starts both processes (no extra Run commands)
+
+ http://localhost:5176/ renders the split Chat/Console scaffolds (no console errors)
+
+ GET /api/health → {"ok":true}
+
+ POST /api/waitlist/join with { name, email } returns { referralLink: "/r/<code>" }
+
+ Opening /r/<code> redirects to /?ref=<code> and (optionally) inserts a referral_events click row
+
+ Supabase shows tables: users, waitlist_entries, referral_codes, referral_events, events
