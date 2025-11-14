@@ -1,0 +1,297 @@
+Perfect—here’s a single, copy‑paste set of directions you can hand to the developer. It scaffolds a clean docs system inside the repo, aligned to our FSD + Atomic architecture and the Landing / Tour / Dashboard UX. I’ve kept content concise but complete so you can ship it as one PR.
+
+UX references map to your prototypes:
+• Landing: 3‑step chat; show the referral link inline + in Console.
+• Tour: chat disabled; button steps; progress, rules, rewards.
+• Dashboard: mission + referral tools; leaders modal/focus‑trap.
+
+📋 Message to developer (copy‑paste)
+
+From repo root in Replit shell:
+
+# 0) Create docs & templates skeleton
+mkdir -p docs/{overview,product/flows,architecture,api,playbooks,decisions,contributing} \
+         .github/ISSUE_TEMPLATE
+
+# 1) Core docs
+
+cat > docs/README.md <<'MD'
+# GoAmpy Docs (Start Here)
+
+This repo captures the product, architecture, API contracts, and playbooks.
+
+**Map**
+- Overview → [overview/](./overview/)
+- Product flows (Landing, Tour, Dashboard) → [product/flows/](./product/flows/)
+- Architecture (FSD+Atomic, BFF, Data) → [architecture/](./architecture/)
+- API reference → [api/](./api/)
+- Playbooks (Replit dev, migrations, observability) → [playbooks/](./playbooks/)
+- Decisions (ADRs) → [decisions/](./decisions/)
+- Contributing (style, testing) → [contributing/](./contributing/)
+
+**UX anchors**
+- Landing: 3‑step chat join; show referral link inline + in Console. :contentReference[oaicite:3]{index=3}
+- Tour: chat disabled; button‑driven steps; progress, rules, rewards. :contentReference[oaicite:4]{index=4}
+- Dashboard: mission + referral tools; leaders modal with focus trap. :contentReference[oaicite:5]{index=5}
+MD
+
+cat > docs/overview/mission-and-scope.md <<'MD'
+# Mission & Scope
+**Mission:** Best‑in‑class beta waitlist + referral product for Ampy (AI growth for B2B LinkedIn creators).
+**Success:** Frictionless join → instant referral link → measurable attribution; +10 base, +20 verified, +10/referral.
+**Non‑goals:** Full content editor/automation (tracked separately).
+MD
+
+# 2) Product flows (grounded to the prototypes)
+
+cat > docs/product/flows/landing.md <<'MD'
+# Landing (Chat + Console)
+Split layout. **Left = chat**, **Right = Console**. Flow: name → email → verify/skip, then show the referral link inline (bot bubble) **and** in Console. :contentReference[oaicite:6]{index=6}
+
+**Acceptance**
+- Referral link is rendered inline immediately after join (Copy + Share to LinkedIn).
+- Console chips show points and progress; "Already signed up?" path works.
+- Mobile: pill switches panels; last panel persisted in localStorage.
+
+**Error UX**
+- Disposable/invalid email messages; SR live region announcements.
+- Rate limit friendly error; retry guidance.
+MD
+
+cat > docs/product/flows/tour.md <<'MD'
+# Tour (Orientation Mode)
+Same split layout, but **chat is disabled**. Steps are button‑driven with progress, “How Priority Works”, and “Rewards Preview”. Finish writes `next_action` and navigates to Dashboard. :contentReference[oaicite:7]{index=7}
+MD
+
+cat > docs/product/flows/dashboard.md <<'MD'
+# Dashboard (Mission Control)
+Mission: **Get your first referral**; render referral card on mount (localStorage/API). Leaders list + modal with focus trap; stats chips from `/api/me/summary`. Share buttons use `/share/<code>` for rich OG unfurls. :contentReference[oaicite:8]{index=8}
+MD
+
+cat > docs/product/incentives-and-points.md <<'MD'
+# Incentives & Points
+Points = **10 base** + **20 if verified** + **10×signupCount**. Ties break by earliest signup; future leaderboard rank is derived from this.
+MD
+
+# 3) Architecture
+
+cat > docs/architecture/system.md <<'MD'
+# System Overview
+Client (React 19 + Vite) → BFF (Express + Drizzle) → Supabase Postgres. Referral loop:
+Join → create/ensure user+waitlist+code (txn) → link `/r/:code` → click logs → `/?ref=code` → referred signup logs "signup".
+MD
+
+cat > docs/architecture/frontend-fsd-atomic.md <<'MD'
+# Frontend: FSD + Atomic
+**FSD layers:** `app/`, `pages/`, `features/`, `entities/`, `shared/`.
+**Atomic UI (in shared/ui):** atoms (Button, Chip, Input) → molecules (ChatBubble, StatChip, ProgressBar) → organisms (ChatPanel, ConsolePanel, ReferralCard, LeaderboardModal).
+Pages are thin: wire layout + call feature APIs. SplitShell layout used by Landing/Tour/Dashboard.
+MD
+
+cat > docs/architecture/backend-bff.md <<'MD'
+# Backend BFF
+Node 20 + Express + Drizzle (postgres-js). Supabase pooler **requires** `prepare:false` and `ssl:'require'`. `app.set('trust proxy',1)`, CORS allowlist via `APP_ORIGIN`, `helmet`, and `pino-http` with PII redaction.
+
+**Key routes**
+- `POST /api/waitlist/join` → **transaction**: user + waitlist + code + events; self‑referral guard; dedupe signup
+- `GET /r/:code` → log click; 302 → `/?ref=<code>`
+- `GET /share/:code` → OG HTML for LinkedIn unfurl; meta refresh to `/?ref=<code>`
+- `GET /api/me/summary` → points/referrals/(rank)
+- `POST /api/auth/otp/send|verify` → Supabase OTP; sets `emailVerifiedAt`
+MD
+
+cat > docs/architecture/data-model.md <<'MD'
+# Data Model
+**users** (id, email, **emailCi unique**, name, emailVerifiedAt, createdAt)
+**waitlist_entries** (id, **userId unique fk**, source, referrerUserId fk, createdAt)
+**referral_codes** (id, **userId fk**, **code unique**, createdAt)
+**referral_events** (id, referralCodeId fk, **type in ['click','signup']**, email?, createdAt) — index (referralCodeId, createdAt)
+**events** (id, userId?, eventName, payload jsonb, createdAt)
+MD
+
+# 4) API (contract + examples)
+
+cat > docs/api/http-contract.md <<'MD'
+# HTTP Contract (BFF)
+
+All responses MAY include `{ error: { code, message } }`.
+
+**POST /api/waitlist/join**  
+Body `{ name, email, ref? }` → `200 { referralLink: "/r/<code>" }`  
+Txn: upsert user, ensure waitlist entry, ensure referral code, events; if `ref`, set `referrerUserId` + log `signup` (deduped).
+
+**GET /r/:code**  
+Log `click` then `302` to `/?ref=<code>`.
+
+**GET /share/:code**  
+An HTML page with OG tags; meta‑refreshes to `/?ref=<code>` for humans.
+
+**GET /api/me/summary?email=<email>`**  
+`200 { points, referrals, rank?, verified? }` (points = 10 + 20*verified + 10*signups)
+
+**POST /api/auth/otp/send** → `{ ok:true }`  
+**POST /api/auth/otp/verify** → `{ verified:true }`
+MD
+
+# 5) Playbooks (Replit, migrations, observability)
+
+cat > docs/playbooks/dev-setup-replit.md <<'MD'
+# Dev Setup (Replit)
+Secrets: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_URL` (pooler, sslmode=require), `APP_ORIGIN` (prod allowlist).
+
+**Run**
+
+
+pkill -f "tsx watch" || true; pkill -f "vite" || true
+npm run dev # client:5000, server:5177
+
+open http://localhost:5000
+ and http://localhost:5177/api/health
+
+**Migrations**
+
+
+npm --workspace server run db:gen
+NODE_OPTIONS=--dns-result-order=ipv4first npm --workspace server run db:push
+|| NODE_OPTIONS=--dns-result-order=ipv6first npm --workspace server run db:push
+
+
+**Smoke**
+
+
+curl -s http://localhost:5177/api/health
+
+curl -s -X POST http://localhost:5177/api/waitlist/join
+
+-H 'content-type: application/json' -d '{"name":"Ada","email":"ada@example.com
+"}'
+curl -s 'http://localhost:5177/api/me/summary?email=ada@example.com
+'
+
+MD
+
+cat > docs/playbooks/observability.md <<'MD'
+# Observability
+- `pino-http` with redaction (no email bodies, no tokens). Add `x-request-id` to responses.
+- `/api/health` → `{ ok, db, svc, version, ts }`.
+- Log metadata only; no response bodies or OTP tokens.
+MD
+
+cat > docs/playbooks/migrations-and-seeding.md <<'MD'
+# Migrations & Seeding
+- Schema lives in `server/src/shared/schema.ts`.
+- Generate SQL: `npm --workspace server run db:gen`
+- Push: `npm --workspace server run db:push` (or paste into Supabase SQL if DNS/firewall interferes).
+- Seed: add a one‑off script under `server/scripts/seed.ts` and run via `tsx`.
+MD
+
+# 6) Decisions (ADRs)
+
+cat > docs/decisions/adr-0001-fsd-atomic.md <<'MD'
+# ADR-0001 FSD + Atomic
+**Decision:** Use Feature‑Sliced Design for structure and Atomic Design for UI.  
+**Why:** Co‑locate logic with features; scale without god files; predictable layering.  
+**Impact:** Pages are thin; shared UI lives in `shared/ui` (atoms → molecules → organisms).
+MD
+
+cat > docs/decisions/adr-0002-supabase-auth.md <<'MD'
+# ADR-0002 Supabase Auth (OTP/Magic Link)
+**Decision:** Use Supabase OTP/magic link for email verification.  
+**Why:** Low friction verification (+20 points), protects referral integrity, easy server integration with service role.  
+**Impact:** `/api/auth/otp/send|verify`; sets `users.emailVerifiedAt`; points reflect verification.
+MD
+
+# 7) Contributing, Security
+
+cat > docs/contributing/CONTRIBUTING.md <<'MD'
+# Contributing
+- Small PRs; screenshots for UI; link to doc sections.
+- TypeScript strict; React 19 hooks; Tailwind for layout.
+- Conventional commits (`feat:`, `fix:`, `docs:`); CI runs typecheck/lint/test.
+- Testing: unit (points math, self‑referral guard, signup dedupe), integration (join/redirect/summary).
+MD
+
+cat > SECURITY.md <<'MD'
+# Security & Privacy
+- Secrets only in Replit App Secrets; never in git.
+- Supabase service role: server‑only; never to client.
+- CORS: `APP_ORIGIN` allowlist for prod, permissive in dev.
+- Rate limit: join + auth endpoints (e.g., 60 / 15m).
+- Logs: redact auth headers, cookies, emails; never log OTP tokens or response bodies.
+MD
+
+# 8) GitHub templates (PRs & Issues)
+
+cat > .github/pull_request_template.md <<'MD'
+## Summary
+- What changed? Why?
+
+## Screenshots / API diffs
+- (Add screenshots or curl outputs)
+
+## Tests
+- [ ] Unit tests
+- [ ] Integration tests
+- [ ] Manual smoke (curl join/summary)
+
+## Docs touched
+- [ ] Updated docs links (flows/architecture/api) as needed
+MD
+
+cat > .github/ISSUE_TEMPLATE/bug_report.yml <<'YML'
+name: Bug Report
+description: Something isn't working
+title: "bug: "
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes: { label: What happened?, description: Steps to reproduce / expected vs actual }
+  - type: textarea
+    id: logs
+    attributes: { label: Logs, description: Redact PII; include request id if available }
+  - type: input
+    id: env
+    attributes: { label: Environment, placeholder: Replit / Local / Prod }
+YML
+
+cat > .github/ISSUE_TEMPLATE/feature_request.yml <<'YML'
+name: Feature Request
+description: Propose an enhancement
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: value
+    attributes: { label: Outcome, description: User value and acceptance criteria }
+  - type: textarea
+    id: plan
+    attributes: { label: Approach, description: Components/services touched; risks }
+YML
+
+# 9) Root README pointer (append this section manually if README already exists)
+echo '
+## Documentation
+Start at [docs/README.md](./docs/README.md)
+
+Key flows:
+- [Landing](./docs/product/flows/landing.md) — 3‑step chat; inline referral link. :contentReference[oaicite:9]{index=9}
+- [Tour](./docs/product/flows/tour.md) — button‑driven; chat disabled. :contentReference[oaicite:10]{index=10}
+- [Dashboard](./docs/product/flows/dashboard.md) — mission + referral tools. :contentReference[oaicite:11]{index=11}
+' >> README.md
+
+echo "✅ Docs scaffolded. Commit as: 'docs: add in-repo documentation (flows, architecture, api, playbooks, ADRs)'"
+
+✅ PR acceptance checklist (include this in the PR description)
+
+ Docs render on GitHub with working links.
+
+ Flows match prototypes: Landing (inline referral), Tour (chat disabled), Dashboard (mission & leaders).
+
+ Architecture pages reflect actual code (FSD + Atomic, BFF, schema).
+
+ API contract covers all live endpoints; example cURLs run locally.
+
+ Playbooks work on Replit (start/stop, migrations, smoke tests).
+
+ SECURITY.md aligns with logging redaction, CORS, and rate limit config.
