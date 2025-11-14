@@ -2,9 +2,9 @@
 
 ## Overview
 
-GoAmpy is a waitlist management application with a gamified referral system. The application features a split-panel landing page where users can interact with an AI chatbot (Ampy) while simultaneously viewing their mission progress and referral incentives. Users join the waitlist through a conversational onboarding flow and receive unique referral codes to invite others.
+GoAmpy is a production-ready waitlist management application with a gamified referral system and enterprise-grade security features. The application features a split-panel landing page where users can interact with an AI chatbot (Ampy) while simultaneously viewing their mission progress and referral incentives. Users join the waitlist through a conversational onboarding flow and receive cryptographically secure referral codes to invite others.
 
-The application is built as a modern SaaS platform with a public-facing waitlist system and an admin dashboard for managing entries and analytics.
+The application is built as a modern SaaS platform with a public-facing waitlist system, robust anti-abuse measures, and an admin dashboard for managing entries and analytics. It includes PWA support for mobile installation, Web Share API integration, and sophisticated referral tracking.
 
 ## User Preferences
 
@@ -14,7 +14,7 @@ Preferred communication style: Simple, everyday language.
 
 ### Frontend Architecture
 
-**Framework**: React 19 with TypeScript and Vite as the build tool.
+**Framework**: React 18.3.1 with TypeScript and Vite as the build tool.
 
 **Routing**: React Router v7 for client-side navigation with dedicated routes:
 - `/` - Landing page with split Chat/Console panels
@@ -50,7 +50,7 @@ Preferred communication style: Simple, everyday language.
 
 **Validation**: Zod schema validation for request bodies (e.g., waitlist join endpoint requires name, email, and optional ref fields).
 
-**Code Generation Logic**: Referral codes are generated from email usernames (first 12 alphanumeric characters). Collision handling uses a retry mechanism with random 3-digit suffixes, falling back to random 6-character strings.
+**Code Generation Logic**: Referral codes use a secure pattern: `{slugified-username}-{random6}` (e.g., `john-doe-x7q3vg`). The random suffix uses safe, unambiguous characters (3456789ABCDEFGHJKLMNPQRTUVWXY) to prevent confusion and brute force attacks. All codes are stored in lowercase for consistent lookups. Collision handling retries up to 5 times with different random suffixes.
 
 ### Data Storage
 

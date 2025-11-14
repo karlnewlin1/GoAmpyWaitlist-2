@@ -1,24 +1,37 @@
 # GoAmpy - AI-Powered Waitlist & Referral System
 
-A production-ready waitlist application with gamified referral tracking, featuring user signup through conversational chat interface, automatic referral link generation, click/signup attribution, and mission control dashboard.
+A production-ready waitlist application with gamified referral tracking, enterprise-grade security, and Progressive Web App support. Features conversational onboarding, cryptographically secure referral codes, anti-abuse measures, and real-time analytics.
 
 ## Tech Stack
 
-- **Frontend**: React 19 (Vite) - FSD + Atomic Design architecture
-- **Backend**: Express BFF on port 5177 with services layer
-- **Database**: Supabase PostgreSQL with Drizzle ORM
-- **Auth**: Supabase Auth with OTP verification
+- **Frontend**: React 18.3.1 (Vite) - FSD + Atomic Design architecture
+- **Backend**: Express.js BFF on port 5177 with services layer
+- **Database**: PostgreSQL (Neon) with Drizzle ORM
+- **Auth**: Supabase Auth with OTP verification (planned)
 - **Deployment**: Replit-optimized PWA on port 5000
 
 ## Features
 
+### Core Features
 - 🎯 Conversational onboarding with AI assistant (Ampy)
-- 🔗 Automatic referral link generation with tracking
+- 🔗 Cryptographically secure referral codes (`username-random6` format)
 - 📊 Points system (10 base + 20 verified + 10/referral)
-- 🏆 Real-time leaderboard with 60-second caching
-- 🔐 Email verification with Supabase OTP
-- 🛡️ Anti-abuse measures (self-referral guard, deduplication)
-- 📱 PWA-ready with responsive split-panel design
+- 🏆 Real-time leaderboard and mission progress tracking
+- 📱 Progressive Web App with offline support
+
+### Security & Anti-Abuse
+- 🔐 Self-referral prevention with proper error handling
+- 🛡️ Disposable email blocking
+- 🔒 Rate limiting on critical endpoints
+- 📝 Comprehensive request logging with PII redaction
+- 🚫 Brute-force resistant referral codes
+
+### User Experience
+- 💬 Split-panel interface (Chat + Mission Control)
+- 📲 Native share integration via Web Share API
+- 📋 Clipboard fallback for desktop users
+- ✅ Visual feedback for all user actions
+- 🎨 Dark mode support with Tailwind CSS
 
 ## Documentation
 
