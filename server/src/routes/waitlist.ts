@@ -2,69 +2,98 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../lib/db.js';
 import { users, waitlistEntries, referralCodes, events, referralEvents } from '../shared/schema.js';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 const r = Router();
 const Body = z.object({ name: z.string().min(2), email: z.string().email(), ref: z.string().optional().nullable() });
-const baseCode = (s:string)=> (s.split('@')[0] || 'user').toLowerCase().replace(/[^a-z0-9]+/g,'').slice(0,12) || 'user';
+
+// Disposable email domains to block
+const DISPOSABLE = /(^|\.)((mailinator|10minutemail|guerrillamail|tempmail)\.com)$/i;
 
 r.post('/join', async (req, res) => {
   const { name, email, ref } = Body.parse(req.body);
-
-  // Upsert user by email (case-insensitive)
-  const emailLower = email.trim().toLowerCase();
-  let [u] = await db.select().from(users).where(eq(users.email, emailLower));
-  if (!u) {
-    try { 
-      [u] = await db.insert(users).values({ 
-        email: emailLower,  // store lowercased email for case-insensitive uniqueness
-        name 
-      }).returning(); 
-    }
-    catch { [u] = await db.select().from(users).where(eq(users.email, emailLower)); }
+  
+  // Block disposable emails
+  if (DISPOSABLE.test(email.split('@')[1] || '')) {
+    return res.status(400).json({ error: 'disposable_email_not_allowed' });
   }
+  
+  const eci = email.trim().toLowerCase();
 
-  // Handle referral attribution
-  let referrerUserId = null;
-  if (ref) {
-    const [owner] = await db.select().from(referralCodes).where(eq(referralCodes.code, ref));
-    if (owner) {
-      referrerUserId = owner.userId;
-      // Log signup event for the referrer
-      await db.insert(referralEvents).values({
-        referralCodeId: owner.id,
-        type: 'signup',
-        email
+  const result = await db.transaction(async (tx) => {
+    // 1) upsert user by emailCi
+    let [u] = await tx.select().from(users).where(eq(users.emailCi, eci));
+    if (!u) {
+      try { 
+        [u] = await tx.insert(users).values({ 
+          email,
+          emailCi: eci,
+          name 
+        }).returning(); 
+      }
+      catch { 
+        [u] = await tx.select().from(users).where(eq(users.emailCi, eci)); 
+      }
+    }
+
+    // 2) waitlist row (idempotent)
+    const [wl] = await tx.select().from(waitlistEntries).where(eq(waitlistEntries.userId, u.id));
+    if (!wl) {
+      await tx.insert(waitlistEntries).values({ 
+        userId: u.id, 
+        source: ref ? 'referral' : 'direct' 
       });
     }
-  }
 
-  // Ensure waitlist entry with referrer attribution
-  const [wl] = await db.select().from(waitlistEntries).where(eq(waitlistEntries.userId, u.id));
-  if (!wl) { 
-    try { 
-      await db.insert(waitlistEntries).values({ 
-        userId: u.id, 
-        source: ref ? 'referral' : 'direct',
-        referrerUserId 
-      }); 
-    } catch {} 
-  }
-
-  // Ensure referral code (handle collisions)
-  const [rc0] = await db.select().from(referralCodes).where(eq(referralCodes.userId, u.id));
-  let code = rc0?.code;
-  if (!code) {
-    let candidate = baseCode(email);
-    for (let i = 0; i < 5; i++) {
-      try { code = (await db.insert(referralCodes).values({ userId: u.id, code: candidate }).returning())[0].code; break; }
-      catch { candidate = `${baseCode(email)}${Math.floor(Math.random()*1000).toString().padStart(3,'0')}`; }
+    // 3) referral code (collision-resistant)
+    const [rc0] = await tx.select().from(referralCodes).where(eq(referralCodes.userId, u.id));
+    let code = rc0?.code;
+    if (!code) {
+      const base = (s:string) => (s.split('@')[0]||'user').toLowerCase().replace(/[^a-z0-9]+/g,'').slice(0,8) || 'user';
+      let candidate = base(email);
+      for (let i=0; i<5 && !code; i++) {
+        try { 
+          code = (await tx.insert(referralCodes).values({ userId: u.id, code: candidate }).returning())[0].code; 
+        }
+        catch { 
+          candidate = `${base(email)}${Math.floor(1000+Math.random()*9000)}`.slice(0,12); 
+        }
+      }
+      if (!code) {
+        code = (await tx.insert(referralCodes).values({ 
+          userId: u.id, 
+          code: Math.random().toString(36).slice(2,8) 
+        }).returning())[0].code;
+      }
     }
-    if (!code) code = (await db.insert(referralCodes).values({ userId: u.id, code: Math.random().toString(36).slice(2,8) }).returning())[0].code;
-  }
 
-  await db.insert(events).values({ userId: u.id, eventName: 'onboarding_completed', payload: { ref: ref ?? null } });
-  res.json({ referralLink: `/r/${code}` });
+    // 4) attribute referral signup if ref present
+    if (ref) {
+      const [owner] = await tx.select().from(referralCodes).where(eq(referralCodes.code, ref));
+      if (owner) {
+        await tx
+          .update(waitlistEntries)
+          .set({ referrerUserId: owner.userId, source: 'referral' })
+          .where(eq(waitlistEntries.userId, u.id));
+        await tx.insert(referralEvents).values({ 
+          referralCodeId: owner.id, 
+          type: 'signup', 
+          email 
+        });
+      }
+    }
+
+    // 5) lifecycle event
+    await tx.insert(events).values({ 
+      userId: u.id, 
+      eventName: 'onboarding_completed', 
+      payload: { ref: ref ?? null } 
+    });
+
+    return { code, userId: u.id };
+  });
+
+  res.json({ code: result.code, referralLink: `/r/${result.code}` });
 });
 
 export default r;
