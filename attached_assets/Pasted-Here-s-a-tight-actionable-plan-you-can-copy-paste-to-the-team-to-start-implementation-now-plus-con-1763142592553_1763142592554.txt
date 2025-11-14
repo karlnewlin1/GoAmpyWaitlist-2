@@ -1,0 +1,162 @@
+Here’s a tight, actionable plan you can copy/paste to the team to start implementation now, plus concrete acceptance checks and tiny code/ops details so there’s no ambiguity.
+
+📣 Team message (copy/paste)
+
+Objective (This week): Ship PR‑A (Security & Reliability) to production readiness. In parallel, start PR‑B (native PWA feel) and PR‑C (OpenAPI docs) workstreams behind flags/feature branches.
+
+Why now: Our architecture is solid, but production‑grade hardening is still required (CORS fallback, PII redaction gaps, missing rate‑limit on referral redirect, and no OpenAPI spec yet). The review + plans already scoped this precisely.
+
+1) Branching & ownership
+
+Create branches:
+
+feat/pr-a-security
+
+feat/pr-b-pwa
+
+feat/pr-c-openapi
+
+CODEOWNERS: set the junior architect as codeowner for /server, /shared, and /docs paths so they can drive these PRs. (Keep main protected; PRs required.)
+
+2) PR‑A — Security & reliability (merge first)
+
+Scope (no surprises):
+
+Pino redaction: add cookie, token/code, and conditionally remove res.body in prod.
+
+CORS allow‑list: require APP_ORIGIN (comma‑separated); fail fast if missing.
+
+Rate‑limit: add limiter for GET /r/:code (100/15m/IP).
+
+Idempotency: support Idempotency-Key on POST /api/waitlist/join.
+
+Health check: include real GIT_SHA, env, uptime; return 503 if DB unhealthy.
+Details, file paths, and tests are in the PR‑A plan (follow it line‑by‑line).
+
+Env (before running):
+
+In Replit Secrets, set:
+
+APP_ORIGIN=https://goampy.com,https://www.goampy.com,http://localhost:5000
+
+
+(Server should fail to start if this isn’t set—intentional.)
+
+Acceptance checks (must pass):
+
+Logs in production mode show no PII (no Authorization, Cookie, email, OTP code; no res.body).
+
+CORS rejects Origin: https://evil.com (no Access-Control-Allow-Origin).
+
+/r/:code hits 429 after limit and returns RateLimit-* headers.
+
+Repeated join with same Idempotency-Key returns cached response.
+
+/api/health includes version (git SHA), env, uptime, and returns 503 if DB down.
+(Exact test commands are already provided in PR‑A.)
+
+3) PR‑B — Native PWA feel (start in parallel, merge after PR‑A)
+
+Scope:
+
+iOS PWA meta tags (apple-touch-icon, apple-mobile-web-app-*, viewport-fit=cover).
+
+Web Share API with clipboard fallback + toast system.
+
+Share page OG tags using environment‑aware image/URLs; keep 10‑minute cache.
+Follow the code diffs in the plan (index.html tags, ReferralCard share handler, toast molecule, dynamic OG URL).
+
+Acceptance checks:
+
+iOS: Add‑to‑Home‑Screen installs; standalone launch; safe‑area respected.
+
+Android: Install prompt works; theme color correct.
+
+“Share Link” opens native share on mobile; copies on desktop with toast.
+
+LinkedIn/Twitter/Facebook show correct preview; redirect after preview.
+
+(UX parity reminder for the app’s feel & flows—Landing 3‑step chat; Tour with chat disabled; Dashboard split chat/console—these are our UX spec targets.)
+
+4) PR‑C — OpenAPI + docs (start in parallel, no runtime risk)
+
+Scope:
+
+Author docs/api/openapi.yaml (3.1) for all live routes:
+
+GET /api/health
+
+POST /api/waitlist/join (idempotent)
+
+GET /r/:code
+
+GET /share/:code
+
+GET /api/me/summary
+
+GET /api/leaderboard/top
+
+POST /api/auth/otp/send
+
+POST /api/auth/otp/verify
+
+Add dev‑only Redoc at /api/docs and CI linting (@redocly/cli).
+Use the provided spec skeleton, docs route, and README pointers in the PR‑C plan.
+
+Acceptance checks:
+
+redocly lint passes (no errors).
+
+/api/docs loads locally; spec served at /api/docs/openapi.yaml.
+
+Error taxonomy matches spec (e.g., disposable_email, self_referral, rate_limit_exceeded, etc.).
+
+5) CI & scripts (small but important)
+
+Add a CI workflow that runs on PRs to main:
+
+npm ci
+
+npm --workspace server run typecheck && npm --workspace client run typecheck
+
+npm run build
+
+npx @redocly/cli lint docs/api/openapi.yaml
+
+In root package.json build script, capture GIT_SHA (as in PR‑A plan).
+
+6) Tracking & comms
+
+Convert the review and three plans into three GitHub issues (one per PR) with the checklists copied from the docs as acceptance criteria. Link to the lines in the docs for each task.
+
+Daily update: a short comment on each PR with:
+
+“Done today” (diff/commits)
+
+“Blocked on”
+
+“Tomorrow”
+
+No scope drift—if something falls outside the plan, propose an ADR stub first.
+
+🔍 My read on the junior architect’s deliverables
+
+Quality & completeness: Strong. The exec review and three PR plans are precise and implementable with file‑level diffs, test commands, and acceptance criteria already written. This aligns with our earlier assessment: solid foundation; needs hardening around security, PWA polish, and API contract.
+
+Order of operations: Correct—PR‑A first (blocks production); PR‑B and PR‑C can proceed in parallel and merge after PR‑A passes QA.
+
+UX north star: Keep the app “native‑feeling” and consistent with the prototype flows (chat left / console right; tour chat disabled; 3‑step onboarding). Use the PWA + Web Share work to support that.
+
+✅ Definition of Done (this sprint)
+
+PR‑A merged: Logs clean, strict CORS, /r/:code limited, idempotency active, health returns real SHA; all PR‑A tests pass.
+
+PR‑B ready for merge: iOS install, native share + fallback, OG preview verified; no regression in Lighthouse PWA score.
+
+PR‑C ready for merge: Valid OpenAPI, Redoc available in dev, error taxonomy stable; TS types generated for client if included.
+
+Docs updated: Link OpenAPI + PR decisions in docs/ and close out the architecture review as “addressed” for the items we merged.
+
+Notes for the devs doing the UI work
+
+The “choose‑your‑own‑adventure” dashboard remains the product principle: keep tasks modular (verify, refer, share to LinkedIn, etc.) so the right panel (Mission Control) can surface dynamic CTAs while chat on the left remains fully functional—same split from the UX reference.
