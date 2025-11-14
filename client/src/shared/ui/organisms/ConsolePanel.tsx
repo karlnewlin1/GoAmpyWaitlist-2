@@ -81,7 +81,7 @@ export function ConsolePanel() {
       <div className="space-y-4">
         {/* Points Display */}
         <Card className="p-6 bg-white/5 border-white/10">
-          <div className="text-3xl font-bold mb-2">{points}</div>
+          <div className="text-3xl font-bold mb-2" data-testid="text-total-points">{points}</div>
           <div className="text-sm text-white/60">Total Points</div>
         </Card>
 
@@ -113,17 +113,17 @@ export function ConsolePanel() {
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-sm text-white/60">Total Signups</span>
-                <span className="text-lg font-medium">{signupCount}</span>
+                <span className="text-lg font-medium" data-testid="text-signup-count">{signupCount}</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-sm text-white/60">Points Earned</span>
-                <span className="text-lg font-medium">+{signupCount * 10}</span>
+                <span className="text-lg font-medium" data-testid="text-referral-points">+{signupCount * 10}</span>
               </div>
             </div>
             
             <div className="mt-4 pt-4 border-t border-white/10">
               <p className="text-xs text-white/40 mb-2">Your referral link:</p>
-              <p className="text-xs text-white/60 break-all font-mono">
+              <p className="text-xs text-white/60 break-all font-mono" data-testid="text-referral-link">
                 {referralLink}
               </p>
             </div>
