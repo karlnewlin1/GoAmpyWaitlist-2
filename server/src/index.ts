@@ -78,9 +78,11 @@ app.use('/api/me', me);
 // Share route with OG tags for social sharing
 app.use('/share', share);
 
-// Referral redirect with click tracking
+// Referral redirect with canonicalized codes
+const normCode = (s:string) => (s || '').toLowerCase().trim().replace(/[^a-z0-9]/g,'').slice(0,24);
+
 app.get('/r/:code', async (req, res) => {
-  const { code } = req.params;
+  const code = normCode(req.params.code);
   try {
     const [rc] = await db.select().from(referralCodes).where(eq(referralCodes.code, code));
     if (rc) await db.insert(referralEvents).values({ referralCodeId: rc.id, type: 'click' });

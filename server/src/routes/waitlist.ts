@@ -10,15 +10,20 @@ const Body = z.object({ name: z.string().min(2), email: z.string().email(), ref:
 // Disposable email domains to block
 const DISPOSABLE = /(^|\.)((mailinator|10minutemail|guerrillamail|tempmail)\.com)$/i;
 
+// Canonicalize helpers
+const normCode = (s:string) => (s || '').toLowerCase().trim().replace(/[^a-z0-9]/g,'').slice(0,24);
+const base = (e:string)=> (e.split('@')[0]||'user').toLowerCase().replace(/[^a-z0-9]+/g,'').slice(0,8) || 'user';
+
 r.post('/join', async (req, res) => {
   const { name, email, ref } = Body.parse(req.body);
   
   // Block disposable emails
   if (DISPOSABLE.test(email.split('@')[1] || '')) {
-    return res.status(400).json({ error: 'disposable_email_not_allowed' });
+    return res.status(400).json({ error: 'Disposable email addresses are not allowed', code: 'disposable_email_not_allowed' });
   }
   
   const eci = email.trim().toLowerCase();
+  const refCode = ref ? normCode(ref) : null;
 
   const result = await db.transaction(async (tx) => {
     // 1) upsert user by emailCi
@@ -45,11 +50,10 @@ r.post('/join', async (req, res) => {
       });
     }
 
-    // 3) referral code (collision-resistant)
+    // 3) referral code (collision-resistant, canonicalized)
     const [rc0] = await tx.select().from(referralCodes).where(eq(referralCodes.userId, u.id));
     let code = rc0?.code;
     if (!code) {
-      const base = (s:string) => (s.split('@')[0]||'user').toLowerCase().replace(/[^a-z0-9]+/g,'').slice(0,8) || 'user';
       let candidate = base(email);
       for (let i=0; i<5 && !code; i++) {
         try { 
@@ -67,19 +71,31 @@ r.post('/join', async (req, res) => {
       }
     }
 
-    // 4) attribute referral signup if ref present
-    if (ref) {
-      const [owner] = await tx.select().from(referralCodes).where(eq(referralCodes.code, ref));
+    // 4) attribute referral signup if ref present (with deduplication)
+    if (refCode) {
+      const [owner] = await tx.select().from(referralCodes).where(eq(referralCodes.code, refCode));
       if (owner) {
+        // Update waitlist entry with referrer
         await tx
           .update(waitlistEntries)
           .set({ referrerUserId: owner.userId, source: 'referral' })
           .where(eq(waitlistEntries.userId, u.id));
-        await tx.insert(referralEvents).values({ 
-          referralCodeId: owner.id, 
-          type: 'signup', 
-          email 
-        });
+        
+        // Prevent duplicate signup credits for same code/email
+        const [exists] = await tx.select().from(referralEvents)
+          .where(and(
+            eq(referralEvents.referralCodeId, owner.id),
+            eq(referralEvents.type, 'signup'),
+            eq(referralEvents.email, email)
+          ));
+        
+        if (!exists) {
+          await tx.insert(referralEvents).values({ 
+            referralCodeId: owner.id, 
+            type: 'signup', 
+            email 
+          });
+        }
       }
     }
 
@@ -87,7 +103,7 @@ r.post('/join', async (req, res) => {
     await tx.insert(events).values({ 
       userId: u.id, 
       eventName: 'onboarding_completed', 
-      payload: { ref: ref ?? null } 
+      payload: { ref: refCode ?? null } 
     });
 
     return { code, userId: u.id };
