@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="180" height="180" xmlns="http://www.w3.org/2000/svg">
+  <rect width="180" height="180" fill="#0b0b0f"/>
+  <circle cx="90" cy="90" r="60" fill="#10b981"/>
+  <text x="90" y="105" font-family="system-ui" font-size="48" font-weight="bold" text-anchor="middle" fill="white">GA</text>
+</svg>

@@ -3,6 +3,7 @@ import { db } from '../lib/db.js';
 import { referralCodes, users } from '../shared/schema.js';
 import { eq } from 'drizzle-orm';
 import { normCode } from '../services/referral.js';
+import { ENV } from '../config/env.js';
 
 const r = Router();
 
@@ -25,13 +26,21 @@ r.get('/:code', async (req, res) => {
 
   const referrerName = rc?.name ? rc.name.split(' ')[0] : 'Someone special';
   const title = `${referrerName} invited you to join GoAmpy`;
-  const description = 'Join the waitlist and get early access to AI-powered growth tools for B2B LinkedIn creators. Earn rewards for every friend you refer!';
-  const url = `/?ref=${encodeURIComponent(code)}`;
-  const shareUrl = `${req.protocol}://${req.get('host')}/share/${code}`;
+  const description = 'Join the waitlist and get early access to AI-powered growth tools. Earn rewards for every friend you refer!';
+  
+  // Build URLs dynamically
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  const landingUrl = `/?ref=${encodeURIComponent(code)}`;
+  const shareUrl = `${baseUrl}/share/${code}`;
+  
+  // Use environment-aware OG image URL
+  const ogImageUrl = ENV.NODE_ENV === 'production'
+    ? 'https://goampy.com/og/ampy-card.png'
+    : `${baseUrl}/og/ampy-card.png`;
   
   // Set cache headers for social media scrapers (10 minute TTL)
-  res.set('Cache-Control', 'public, max-age=600');
-  res.set('content-type', 'text/html; charset=utf-8');
+  res.set('Cache-Control', 'public, max-age=600, s-maxage=600');
+  res.set('Content-Type', 'text/html; charset=utf-8');
   
   res.send(`<!doctype html>
 <html lang="en">
@@ -41,22 +50,30 @@ r.get('/:code', async (req, res) => {
   <title>${title}</title>
   
   <!-- Prevent search engine indexing -->
-  <meta name="robots" content="noindex">
+  <meta name="robots" content="noindex, nofollow">
   
-  <!-- OG Tags for LinkedIn/Social Preview -->
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="${shareUrl}">
   <meta property="og:title" content="${title}">
   <meta property="og:description" content="${description}">
-  <meta property="og:image" content="https://goampy.com/og/ampy-card.png">
-  <meta property="og:url" content="${shareUrl}">
-  <meta property="og:type" content="website">
+  <meta property="og:image" content="${ogImageUrl}">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:site_name" content="GoAmpy">
   
+  <!-- Twitter -->
   <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:url" content="${shareUrl}">
   <meta name="twitter:title" content="${title}">
   <meta name="twitter:description" content="${description}">
-  <meta name="twitter:image" content="https://goampy.com/og/ampy-card.png">
+  <meta name="twitter:image" content="${ogImageUrl}">
   
-  <!-- Auto-redirect to landing with ref code -->
-  <meta http-equiv="refresh" content="1;url=${url}">
+  <!-- LinkedIn -->
+  <meta property="og:locale" content="en_US">
+  
+  <!-- Auto-redirect (give crawlers time to read OG tags) -->
+  <meta http-equiv="refresh" content="2;url=${landingUrl}">
   
   <style>
     body {
@@ -80,7 +97,7 @@ r.get('/:code', async (req, res) => {
   <h1>${title}</h1>
   <p>Taking you to GoAmpy...</p>
   <script>
-    setTimeout(() => { window.location.href = '${url}'; }, 1000);
+    setTimeout(() => { window.location.href = '${landingUrl}'; }, 1000);
   </script>
 </body>
 </html>`);

@@ -19,11 +19,24 @@ export function ConsolePanel() {
         await navigator.share({
           url: fullUrl,
           title: 'Join me on GoAmpy',
-          text: 'Join the GoAmpy waitlist and earn rewards!'
+          text: 'I\'m on the GoAmpy waitlist! Join me and let\'s get early access together.'
         });
+        // Success - show toast notification
+        const event = new CustomEvent('toast', {
+          detail: { 
+            message: 'Shared successfully!',
+            type: 'success'
+          }
+        });
+        window.dispatchEvent(event);
+        setCopyStatus('idle');
         return;
-      } catch (err) {
-        // User cancelled share, fall through to clipboard
+      } catch (err: any) {
+        // User cancelled share
+        if (err.name === 'AbortError') {
+          return; // User cancelled - don't show any message
+        }
+        // Fall through to clipboard on other errors
       }
     }
     
@@ -31,9 +44,39 @@ export function ConsolePanel() {
     try {
       await navigator.clipboard.writeText(fullUrl);
       setCopyStatus('copied');
+      
+      // Show toast notification
+      const event = new CustomEvent('toast', {
+        detail: { 
+          message: 'Referral link copied to clipboard!',
+          type: 'success'
+        }
+      });
+      window.dispatchEvent(event);
+      
       setTimeout(() => setCopyStatus('idle'), 2000);
-    } catch {
-      setCopyStatus('failed');
+    } catch (error) {
+      console.error('Failed to copy:', error);
+      
+      // Last resort: select text in a temporary input
+      const input = document.createElement('input');
+      input.value = fullUrl;
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand('copy');
+      document.body.removeChild(input);
+      
+      setCopyStatus('copied');
+      
+      // Show toast notification
+      const event = new CustomEvent('toast', {
+        detail: { 
+          message: 'Referral link copied!',
+          type: 'success'
+        }
+      });
+      window.dispatchEvent(event);
+      
       setTimeout(() => setCopyStatus('idle'), 2000);
     }
   };

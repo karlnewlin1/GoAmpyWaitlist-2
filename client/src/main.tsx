@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
 import { LandingPage } from './pages/landing/LandingPage';
+import { ToastContainer } from './shared/ui/molecules/Toast';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Root element not found');
@@ -11,5 +12,6 @@ if (!root) throw new Error('Root element not found');
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
     <LandingPage />
+    <ToastContainer />
   </React.StrictMode>
 );
