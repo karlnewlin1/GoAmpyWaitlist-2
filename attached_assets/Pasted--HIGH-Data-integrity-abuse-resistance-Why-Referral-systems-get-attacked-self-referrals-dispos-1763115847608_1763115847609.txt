@@ -1,0 +1,314 @@
+[HIGH] Data integrity & abuse resistance
+
+Why: Referral systems get attacked (self‑referrals, disposable emails, code guessing).
+
+Do
+
+Strong referral code generation
+
+Today’s scheme (username‑derived) is readable and guessable. Move to a hybrid: slugify(username) + short random suffix to ensure uniqueness and avoid brute‑force enumeration.
+
+import { customAlphabet } from 'nanoid/non-secure'; // server only
+const nano = customAlphabet('3456789ABCDEFGHJKLMNPQRTUVWXY', 6);
+const code = `${slugify(localPart, { lower:true })}${nano()}`; // e.g., "ada-X7Q3VG"
+
+
+Keep a unique index on referral_codes.code (you already have one).
+
+Self‑referral & duplicates
+
+Ensure case‑insensitive email de‑dupe (users.email_ci unique).
+
+Check constraint (if supported in your setup) preventing referrer_user_id = user_id.
+
+Foreign keys + cascade deletes
+
+Confirm FKs with ON DELETE CASCADE for referral→events etc (your developer says this is in place—double‑check).
+
+Atomic join (user + waitlist + code + event) in one transaction—team says it’s done; keep it.
+
+Acceptance check
+
+On identical email (case variants) no duplicate row is created.
+
+Self referral rejected with a 400 and a clean error code ({ error:{ code:'self_referral' } }).
+
+[HIGH] “Verification‑only” Auth (Phase A) hardening
+
+Why: We use Supabase Auth for OTP verification (+20 points) without persistent client sessions.
+
+Do
+
+Keep server‑side Supabase admin client only (no client secret leakage).
+
+Store users.supa_user_id + email_verified_at on verify success.
+
+Ensure /api/me/summary computes points as: 10 base + 20 if verified + 10*referrals. UI must not recompute on client—read from the API. (Dashboard & Landing reflect server points.)
+
+Acceptance check
+
+After verifying OTP, summary reflects +20. Landing banner “Verify for +20” disappears; Dashboard chips update.
+
+[HIGH] PWA + native feel (core requirement)
+
+Why: You asked for a “feels native” web app; let’s ship a real PWA.
+
+Do
+
+Install PWA plugin in client:
+
+npm --workspace client i -D vite-plugin-pwa
+
+
+vite.config.ts (client) – add:
+
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { VitePWA } from 'vite-plugin-pwa';
+
+export default defineConfig({
+  server: { port: 5000, proxy: { '/api': 'http://localhost:5177', '/r': 'http://localhost:5177', '/share': 'http://localhost:5177' } },
+  plugins: [
+    react(),
+    VitePWA({
+      registerType: 'autoUpdate',
+      includeAssets: ['favicon.png', 'robots.txt', 'apple-touch-icon.png'],
+      manifest: {
+        name: 'GoAmpy',
+        short_name: 'GoAmpy',
+        start_url: '/',
+        display: 'standalone',
+        background_color: '#0b0c10',
+        theme_color: '#0b0c10',
+        icons: [
+          { src: '/pwa-192.png', sizes: '192x192', type: 'image/png' },
+          { src: '/pwa-512.png', sizes: '512x512', type: 'image/png' }
+        ]
+      }
+    })
+  ]
+});
+
+
+Meta & safe areas
+
+Ensure <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"> (already in your HTML).
+
+Use CSS vars for notches: padding-top: env(safe-area-inset-top); etc. (Your refs already hint at this).
+
+Web Share API for referral links (fallback to copy):
+In Dashboard & Landing inline referral UI, prefer navigator.share when available; fallback to clipboard.writeText. (Your prototype has LinkedIn share URL—keep it as a secondary CTA.)
+
+Acceptance check
+
+“Add to Home Screen” prompts on Android; standalone mode launches without browser UI; share sheet opens on iOS/Android.
+
+[HIGH] SSR-friendly share pages & caching
+
+Why: Social platforms scrape OG tags; ensure fast resolves & good previews.
+
+Do
+
+/share/:code should:
+
+Return dynamic OG tags (title, desc, image) with 200 OK HTML.
+
+Set cache: Cache-Control: public, max-age=600.
+
+Include <meta name="robots" content="noindex"> to avoid polluting search.
+
+Then JS redirect to /?ref=code for humans.
+
+Acceptance check
+
+LinkedIn “Preview” shows the correct card; repeated shares reuse cached OG (10‑minute TTL).
+
+[MED] Observability & ops
+
+Do
+
+Request ID: add an X-Request-Id for correlation; log it.
+
+/api/health should verify DB availability (simple SELECT 1), plus return timestamp and git SHA.
+
+Metrics: keep simple—log counters for otp_sent, otp_verified, join, ref_click, ref_signup. (We can add PostHog later.)
+
+[MED] Frontend structure (FSD + Atomic) enforcement
+
+Why: Keep codebase scalable and discoverable.
+
+Do (client/src)
+
+app/                // app bootstrap
+  providers/
+  router/
+pages/
+  landing/
+  tour/
+  dashboard/
+features/
+  auth-otp/
+    api/   // /api/auth/otp/send & /verify
+    ui/    // Verify banner, OTP input block (atoms/molecules)
+  waitlist/
+    api/   // /api/waitlist/join
+    model/
+  referral/
+    api/   // /r/:code click track, /share/:code fetch
+    ui/    // Referral card organisms
+  leaderboard/
+    api/   // /api/leaderboard/top
+    ui/
+entities/
+  user/
+    api/   // /api/me/summary
+    model/
+shared/
+  ui/
+    atoms/
+    molecules/
+    organisms/
+  lib/     // fetch wrapper, env, zod schemas
+  config/
+
+
+Map your prototype fragments into Atomic pieces:
+
+Atoms: chips, buttons, avatar;
+
+Molecules: message bubble, OTP group;
+
+Organisms: Chat panel, Console panel, Referral card.
+
+Acceptance check
+
+No cross‑feature imports. Pages only assemble features + entities + shared.
+
+[MED] Performance & UX polish
+
+Do
+
+Type‑ahead + focus behaviors in Landing/Tour match your prototypes (you already handle OTP mirroring between inline input and chat input). Keep it snappy and respect prefers-reduced-motion.
+
+Code‑split routes, prefetch Dashboard code when user finishes signup.
+
+Leaderboard: cache on server for 60s; set stale‑while‑revalidate.
+
+[MED] Testing & CI
+
+Do
+
+Server: Vitest + Supertest for /api/waitlist/join, /api/auth/otp/*, /r/:code, /api/me/summary.
+
+Client: Vitest + React Testing Library for Verify flow; Playwright for E2E (desktop & mobile viewport).
+
+CI GitHub Action: lint, typecheck, test, build client & server.
+
+Pre‑commit (Husky): lint-staged on changed files.
+
+Small, focused diffs to hand your developer
+
+Use these as PR‑sized patches; don’t paste huge files—keep to surgical changes.
+
+Log redaction – server/src/index.ts
+
+- app.use(pinoHttp())
++ app.use(pinoHttp({
++   redact: ['req.headers.authorization','req.headers.cookie','req.body.email','req.body.token','res.body'],
++   serializers: { res: (res) => ({ statusCode: res.statusCode }) },
++ }))
+
+
+CORS from env – server/src/index.ts
+
+- app.use(cors())
++ app.set('trust proxy', 1)
++ app.use(cors({ origin: (process.env.APP_ORIGIN ?? '').split(','), credentials: false }))
++ app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }))
+
+
+Stronger referral codes – server/src/services/referral.ts (or where codes are created)
+
+import slugify from 'slugify';
+import { customAlphabet } from 'nanoid/non-secure';
+const nano = customAlphabet('3456789ABCDEFGHJKLMNPQRTUVWXY', 6);
+
+export function makeReferralCode(email: string) {
+  const u = email.split('@')[0];
+  return `${slugify(u, { lower: true })}-${nano()}`;
+}
+
+
+Points source of truth – server/src/routes/me.ts
+
+- const points = 10 + (verified?20:0) + referrals*10
++ const points = 10 + (user.emailVerifiedAt ? 20 : 0) + (referrals * 10)
+
+
+Web Share fallback – client/features/referral/ui/referral-card.tsx
+
+async function share(link: string) {
+  if (navigator.share) {
+    try { await navigator.share({ url: link, title: 'Join me on GoAmpy' }); return; } catch {}
+  }
+  await navigator.clipboard.writeText(link);
+  toast('Link copied');
+}
+
+
+PWA plugin – client/vite.config.ts (see full example above)
+
+“Choose‑your‑own‑adventure” on Dashboard (flexible & future‑proof)
+
+Keep the Dashboard open‑ended by driving it from a task registry. Each task declares:
+
+id, type (verify, refer, share_linkedin, answer_survey, connect_linkedin),
+
+requires (predicates on user state),
+
+reward points,
+
+action (client handler or /api/* call).
+
+A simple JSON (or TS object) in client/features/tasks/model/registry.ts lets you add/swap tasks without rewriting components. The Console panel reads the registry + /api/me/summary and renders eligible tasks as chips/cards—exactly the open feel you want on the right panel. (Pairs nicely with the left chat guiding narrative.)
+
+Quick QA script (copy/paste for the team)
+
+Join: complete Landing flow without verify → points=10; referral link shows inline and in console.
+
+Verify: send OTP, enter 6 digits → points=30; verify banner off; summary reflects +20.
+
+Referral click: /r/:code logs click and redirects to /?ref=code.
+
+Referral signup: new user with ?ref=code → referrer +10 points; self‑referral blocked.
+
+Share card: /share/:code shows OG preview on LinkedIn; caches for 10 min.
+
+Mobile: app feels native, A2HS offered; Web Share API works from Dashboard referral card.
+
+What I need the developer to do next (copy‑paste)
+
+Title: harden security, adopt PWA, improve referral codes, enforce FSD
+Checklist:
+
+ Add Pino redaction; remove response body logging.
+
+ Lock CORS to APP_ORIGIN; keep helmet CSP off for now (OG + Li).
+
+ Replace referral code generator with slug + random suffix (unique index stays).
+
+ Ensure /api/me/summary is sole points source; UI reads it (no client math).
+
+ Wire Web Share API on referral UI (fallback to copy).
+
+ Add PWA via vite-plugin-pwa with manifest + autoUpdate SW.
+
+ Confirm FKs + unique indices on users.email_ci, referral_codes.code, waitlist_entries.user_id.
+
+ Add request‑id middleware + enrich logs.
+
+ Add server tests (join, otp, share, r/:code, summary) and a basic E2E for Landing → Verify → Dashboard.
+
+ Ensure folder structure aligns with FSD + Atomic (see tree above).
+
+ Document the above in /docs/decisions/ (ADR: Referral code strategy, Auth Phase A, PWA, Logging policy).
