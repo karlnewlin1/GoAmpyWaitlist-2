@@ -1,0 +1,241 @@
+here’s a tight repo review + enforcement plan to keep the code “best‑in‑class” and aligned to our FSD (Feature‑Sliced Design) + Atomic architecture and the split‑panel UX (Chat left / Console right) shown in our prototypes for Landing, Tour, and Dashboard.
+
+I checked your repo root. The structure has client/, server/, shared/, plus build/config files (vite.config.ts, tailwind.config.ts, drizzle.config.ts, postcss.config.js, components.json, replit.md). That matches our monorepo plan and Replit setup.
+
+1) What’s good (keep doing this)
+
+Monorepo shape (client/, server/, shared/). Clear boundary between UI and BFF.
+
+Working referral loop: join → /r/:code click → /?ref= attribution → summary. This maps to the UX exactly (Landing shows link inline; Tour is button‑driven; Dashboard mounts referral tools).
+
+Atomic transaction + email normalization + rate‑limit + disposable‑domain guard: strong foundation for scale.
+
+2) Where we need to tighten (best‑in‑class gates)
+
+Below are precise PRs the developer can open now. Each has a scope, acceptance criteria, and a small implementation hint. These also lock in our FSD + Atomic layout.
+
+PR‑A: Enforce FSD + Atomic on the client
+
+Goal: Make the UI maintainable and “config‑driven” while preserving the split‑panel UX.
+
+Target structure
+
+client/src/
+  app/                    # app shell & providers
+    app.tsx
+    router.tsx
+    layout/SplitShell.tsx        # Chat (left) + Console (right)
+  pages/                  # FSD pages layer (templates/pages)
+    landing/              # /
+      LandingPage.tsx
+      model.ts            # local page state, adapters
+    tour/                 # /tour
+      TourPage.tsx
+      model.ts
+    dashboard/            # /dashboard
+      DashboardPage.tsx
+      model.ts
+  features/               # independent feature slices
+    waitlist/
+      api.ts              # calls to /api/waitlist/*
+      hooks.ts
+      index.ts
+    referral/
+      api.ts              # /r/:code (redirect), /share/:code link helpers
+      components/ReferralCard.tsx   # organism (uses shared/ui atoms/molecules)
+    auth/
+      api.ts              # /api/auth/otp/*
+      hooks.ts
+    leaderboard/
+      api.ts              # /api/leaderboard/top
+      components/LeaderboardModal.tsx
+    tour/
+      model.ts            # step machine, progress calc
+  entities/               # domain entities (user, stats, code)
+    user/model.ts
+    referral-code/model.ts
+    stats/model.ts
+  shared/                 # cross-cutting
+    ui/                   # Atomic: atoms → molecules → organisms
+      atoms/              # Button, Chip, Input, Badge, Avatar, Code, IconButton
+      molecules/          # ChatBubble, StatChip, ProgressBar, ConsoleCard, OTPInput
+      organisms/          # ChatPanel, ConsolePanel, LeaderboardModal, NavBar, MobileTabs
+      index.ts
+    lib/                  # utils, fetch client, zod schemas
+      http.ts
+      zod.ts
+      format.ts
+    config/
+      env.ts              # Vite env parsing
+    styles/
+      tokens.css          # design tokens
+      globals.css
+
+
+Acceptance
+
+Routes: /, /tour, /dashboard render using SplitShell with mobile pills (prototype behavior).
+
+Landing: chat 3‑step (name → email → verify/skip), shows referral link inline and in Console.
+
+Tour: chat disabled, button‑driven progress, rules & rewards; finish sets next_action and navigates.
+
+Dashboard: referral card mounts if link exists; leaderboard modal has a11y focus trap.
+
+PR‑B: FSD on the server + middlewares
+
+Goal: Clear separation of concerns with services and middleware, plus security hygiene.
+
+Target structure
+
+server/src/
+  index.ts               # bootstrap
+  app.ts                 # express app (mount middleware + routes)
+  config/env.ts          # parse env, throw on missing
+  lib/
+    db.ts                # drizzle + postgres({ prepare:false, ssl:'require' })
+    supabase.ts          # supabase admin client
+    logger.ts            # pino-http with redaction + reqId
+  shared/schema.ts       # drizzle schema (FKs, indexes)
+  middleware/
+    auth.ts              # supabase JWT verify (JWKS) -> req.user
+    errors.ts            # error envelope { error:{code,message} }
+    rateLimit.ts         # join limiter
+    cors.ts              # APP_ORIGIN allowlist
+  services/
+    referral.ts          # codegen, attribution, dedupe
+    points.ts            # computePoints(events)
+  routes/
+    health.ts
+    waitlist.ts          # atomic join, self-referral guard
+    redirects.ts         # /r/:code
+    share.ts             # /share/:code (OG, X-Robots-Tag: noindex)
+    me.ts                # /api/me/summary (uses computePoints)
+    auth.ts              # /api/auth/otp/send|verify (Supabase)
+    leaderboard.ts       # top N, cached 60s
+
+
+Acceptance
+
+app.set('trust proxy', 1), pino with redaction (no bodies/PII), strict CORS (APP_ORIGIN).
+
+Supabase pooler safe: prepare:false.
+
+Global error handler returns { error: { code, message } }.
+
+All routes above mounted and covered by unit/integration tests.
+
+PR‑C: Anti‑abuse & integrity (light)
+
+Why: Protect stats before growth.
+
+Acceptance
+
+Self‑referral: never credit signup if code owner’s email == joiner’s emailCi.
+
+Signup de‑dupe: no duplicate (referralCodeId, email, 'signup').
+
+Optional: click de‑dupe window (e.g., 24h by code+ipHash+ua).
+
+Add/confirm indexes: users.emailCi (unique), referral_codes.code (unique), referral_events(referralCodeId, createdAt).
+
+PR‑D: Supabase Auth (hybrid)
+
+Why: Real verification (+20 points), and genuine “returning user” state.
+
+Acceptance
+
+/api/auth/otp/send and /api/auth/otp/verify (Supabase admin), sets users.emailVerifiedAt.
+
+me/summary adds +20 if verified.
+
+Middleware auth.ts validates JWT for any “me/*” endpoints.
+
+PR‑E: Leaderboard & points projection
+
+Why: Motivation + performance.
+
+Acceptance
+
+/api/leaderboard/top?limit=50 returns { firstName, emailMasked, points, referrals } sorted by points desc, then earliest signup.
+
+computePoints(events) = 10 base + (verified?20:0) + 10*referralSignups.
+
+60‑second in‑memory cache or materialized view for top 100.
+
+PR‑F: PWA “native feel”
+
+Why: The app should feel installed/full‑screen on mobile.
+
+Acceptance
+
+manifest.webmanifest, icons, <meta name="theme-color">, light SW (cache shell/icons).
+
+Mobile pills remember last panel (localStorage), as in prototypes.
+
+3) “Definition of Done” checklists (dev can copy into issues)
+
+Server DoD
+
+ trust proxy, helmet (tuned CSP), strict CORS.
+
+ pino-http with redaction; x-request-id response header.
+
+ Supabase pooler config prepare:false.
+
+ Atomic join, self‑referral guard, signup dedupe.
+
+ /share/:code sets X-Robots-Tag: noindex, nofollow.
+
+ Error envelope standardized.
+
+ Drizzle migrations pass in CI.
+
+Client DoD
+
+ FSD layers (app/pages/features/entities/shared).
+
+ Atomic UI (atoms/molecules/organisms) extracted (Button, Chip, ChatBubble, ConsoleCard, ReferralCard, OTPInput, SplitShell, LeaderboardModal).
+
+ Landing shows the referral link inline (chat bubble) + in Console; Tour keeps chat disabled; Dashboard mounts referral card; leaderboard modal has focus trap.
+
+ Vite server port fixed (e.g., 5000) with proxy '/api' and '/r' to 5177.
+
+Ops DoD
+
+ Root scripts: dev, build, start, typecheck, lint.
+
+ GitHub Action: typecheck + lint + test + drizzle migration dry‑run.
+
+ README section: env vars (Replit secrets) and curl smoke tests.
+
+4) Quick smoke tests (copy/paste)
+# Health
+curl -s http://localhost:5177/api/health | jq .
+
+# Join (no ref)
+curl -s -X POST http://localhost:5177/api/waitlist/join \
+  -H 'content-type: application/json' \
+  -d '{"name":"Ada Lovelace","email":"ada@example.com"}' | jq .
+
+# Redirect logs click → 302 to /?ref=<code>
+curl -i http://localhost:5177/r/<CODE>
+
+# Join with ref (signup attribution)
+curl -s -X POST http://localhost:5177/api/waitlist/join \
+  -H 'content-type: application/json' \
+  -d '{"name":"Bob","email":"bob@example.com","ref":"<CODE>"}' | jq .
+
+# Summary (+10 base, +20 if verified, +10 per signup)
+curl -s "http://localhost:5177/api/me/summary?email=ada@example.com" | jq .
+
+# Leaderboard (after PR‑E)
+curl -s "http://localhost:5177/api/leaderboard/top?limit=10" | jq .
+
+5) Why this aligns with the original UX & roadmap
+
+Landing: 3‑step chat, inline referral link in bot bubble, plus Console chips and progress.
+
+Tour: chat disabled with button CTAs, progress rail, rules & rewards; finish funnels to Dashboard.
+
+Dashboard: mission (“Get your first referral”), referral card with copy/share, leaderboard modal.
