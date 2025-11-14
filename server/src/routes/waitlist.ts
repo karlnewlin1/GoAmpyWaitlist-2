@@ -13,16 +13,15 @@ r.post('/join', async (req, res) => {
 
   // Upsert user by email (case-insensitive)
   const emailLower = email.trim().toLowerCase();
-  let [u] = await db.select().from(users).where(eq(users.emailCi, emailLower));
+  let [u] = await db.select().from(users).where(eq(users.email, emailLower));
   if (!u) {
     try { 
       [u] = await db.insert(users).values({ 
-        email,  // display email
-        emailCi: emailLower,  // lowercased for uniqueness
+        email: emailLower,  // store lowercased email for case-insensitive uniqueness
         name 
       }).returning(); 
     }
-    catch { [u] = await db.select().from(users).where(eq(users.emailCi, emailLower)); }
+    catch { [u] = await db.select().from(users).where(eq(users.email, emailLower)); }
   }
 
   // Handle referral attribution
