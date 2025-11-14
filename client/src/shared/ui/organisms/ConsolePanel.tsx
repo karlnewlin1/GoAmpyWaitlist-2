@@ -1,11 +1,49 @@
 import { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Share2, Copy } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
 
 export function ConsolePanel() {
+  const { toast } = useToast();
   const [referralLink, setReferralLink] = useState('');
   const [signupCount, setSignupCount] = useState(0);
   const [points, setPoints] = useState(0);
   const [isVerified, setIsVerified] = useState(false);
+
+  // Share functionality with Web Share API and fallback
+  const shareReferralLink = async () => {
+    const fullUrl = window.location.origin + referralLink;
+    
+    // Try Web Share API first (native mobile share)
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          url: fullUrl,
+          title: 'Join me on GoAmpy',
+          text: 'Join the GoAmpy waitlist and earn rewards!'
+        });
+        return;
+      } catch (err) {
+        // User cancelled share, fall through to clipboard
+      }
+    }
+    
+    // Fallback to clipboard copy
+    try {
+      await navigator.clipboard.writeText(fullUrl);
+      toast({
+        title: 'Link copied!',
+        description: 'Referral link copied to clipboard',
+      });
+    } catch {
+      toast({
+        title: 'Copy failed',
+        description: 'Please copy the link manually',
+        variant: 'destructive',
+      });
+    }
+  };
 
   useEffect(() => {
     // Listen for referral link generation
@@ -126,6 +164,18 @@ export function ConsolePanel() {
               <p className="text-xs text-white/60 break-all font-mono" data-testid="text-referral-link">
                 {referralLink}
               </p>
+              <div className="mt-3 flex gap-2">
+                <Button 
+                  onClick={shareReferralLink}
+                  size="sm"
+                  className="flex-1"
+                  variant="outline"
+                  data-testid="button-share-referral"
+                >
+                  <Share2 className="w-4 h-4 mr-2" />
+                  {navigator.share ? 'Share' : 'Copy'}
+                </Button>
+              </div>
             </div>
           </Card>
         )}
