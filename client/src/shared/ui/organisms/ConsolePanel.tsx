@@ -2,14 +2,13 @@ import { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Share2, Copy } from 'lucide-react';
-import { useToast } from '@/hooks/use-toast';
 
 export function ConsolePanel() {
-  const { toast } = useToast();
   const [referralLink, setReferralLink] = useState('');
   const [signupCount, setSignupCount] = useState(0);
   const [points, setPoints] = useState(0);
   const [isVerified, setIsVerified] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
 
   // Share functionality with Web Share API and fallback
   const shareReferralLink = async () => {
@@ -32,16 +31,11 @@ export function ConsolePanel() {
     // Fallback to clipboard copy
     try {
       await navigator.clipboard.writeText(fullUrl);
-      toast({
-        title: 'Link copied!',
-        description: 'Referral link copied to clipboard',
-      });
+      setCopyStatus('copied');
+      setTimeout(() => setCopyStatus('idle'), 2000);
     } catch {
-      toast({
-        title: 'Copy failed',
-        description: 'Please copy the link manually',
-        variant: 'destructive',
-      });
+      setCopyStatus('failed');
+      setTimeout(() => setCopyStatus('idle'), 2000);
     }
   };
 
@@ -172,8 +166,16 @@ export function ConsolePanel() {
                   variant="outline"
                   data-testid="button-share-referral"
                 >
-                  <Share2 className="w-4 h-4 mr-2" />
-                  {navigator.share ? 'Share' : 'Copy'}
+                  {copyStatus === 'copied' ? (
+                    <>✓ Copied!</>
+                  ) : copyStatus === 'failed' ? (
+                    <>× Failed</>
+                  ) : (
+                    <>
+                      <Share2 className="w-4 h-4 mr-2" />
+                      {navigator.share ? 'Share' : 'Copy'}
+                    </>
+                  )}
                 </Button>
               </div>
             </div>
