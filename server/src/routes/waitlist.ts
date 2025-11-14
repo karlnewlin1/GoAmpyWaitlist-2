@@ -5,6 +5,7 @@ import { users, waitlistEntries, events } from '../shared/schema.js';
 import { eq } from 'drizzle-orm';
 import { referralService, normCode } from '../services/referral.js';
 import { AppError, asyncHandler } from '../middleware/errors.js';
+import { idempotencyService } from '../lib/idempotency.js';
 
 const r = Router();
 const Body = z.object({ 
@@ -17,6 +18,15 @@ const Body = z.object({
 const DISPOSABLE = /(^|\.)((mailinator|10minutemail|guerrillamail|tempmail)\.com)$/i;
 
 r.post('/join', asyncHandler(async (req, res) => {
+  // Extract idempotency key
+  const idempotencyKey = idempotencyService.extractKey(req);
+  
+  // Check if we've seen this request before
+  const cached = idempotencyService.check(idempotencyKey);
+  if (cached) {
+    return res.json(cached);
+  }
+  
   const { name, email, ref } = Body.parse(req.body);
   
   // Block disposable emails
@@ -83,7 +93,15 @@ r.post('/join', asyncHandler(async (req, res) => {
     return { code, userId: u.id };
   });
 
-  res.json({ code: result.code, referralLink: `/r/${result.code}` });
+  const response = { 
+    code: result.code, 
+    referralLink: `/r/${result.code}` 
+  };
+  
+  // Store for idempotency
+  idempotencyService.store(idempotencyKey, response);
+  
+  res.json(response);
 }));
 
 export default r;

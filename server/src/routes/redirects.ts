@@ -1,18 +1,21 @@
-import { Router } from 'express';
-import { referralService } from '../services/referral.js';
+import { Router, Request, Response } from 'express';
+import { referralService, normCode } from '../services/referral.js';
 import { asyncHandler } from '../middleware/errors.js';
+import { referralClickLimiter } from '../middleware/rateLimit.js';
 
 const router = Router();
 
-// Referral redirect with canonicalized codes
-router.get('/r/:code', asyncHandler(async (req, res) => {
+// Apply rate limiting BEFORE the handler
+router.get('/r/:code', referralClickLimiter, asyncHandler(async (req: Request, res: Response) => {
   const code = req.params.code;
   
-  // Log click event
-  await referralService.logClick(code);
+  // Log click event (fire and forget, don't block on errors)
+  referralService.logClick(code).catch(err => 
+    console.error('Failed to log referral click:', err)
+  );
   
   // Redirect to landing with normalized code
-  const normalizedCode = referralService.normCode(code);
+  const normalizedCode = normCode(code);
   res.redirect(`/?ref=${encodeURIComponent(normalizedCode)}`);
 }));
 

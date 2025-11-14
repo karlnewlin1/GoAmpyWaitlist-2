@@ -15,3 +15,17 @@ export const authLimiter = rateLimit({
   legacyHeaders: false,
   message: 'Too many authentication attempts from this IP, please try again later.'
 });
+
+export const referralClickLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,  // 15 minutes
+  max: 100,                   // 100 clicks per window per IP
+  standardHeaders: 'draft-7', // Add RateLimit-* headers
+  legacyHeaders: false,
+  skipSuccessfulRequests: false, // Count all requests
+  message: { 
+    error: { 
+      code: 'rate_limit_exceeded', 
+      message: 'Too many referral clicks from this IP, please try again later.' 
+    }
+  }
+});

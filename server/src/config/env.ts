@@ -7,8 +7,9 @@ export const ENV = {
   BFF_PORT: Number(process.env.BFF_PORT || 5177),
   NODE_ENV: process.env.NODE_ENV || 'development',
   
-  // Security
-  APP_ORIGIN: process.env.APP_ORIGIN?.split(',').map(s => s.trim()).filter(Boolean) || [],
+  // Security - default to localhost in development
+  APP_ORIGIN: process.env.APP_ORIGIN?.split(',').map(s => s.trim()).filter(Boolean) || 
+    (process.env.NODE_ENV === 'development' ? ['http://localhost:5000', 'http://localhost:5177'] : []),
   
   // Version
   GIT_SHA: process.env.GIT_SHA || 'dev',
