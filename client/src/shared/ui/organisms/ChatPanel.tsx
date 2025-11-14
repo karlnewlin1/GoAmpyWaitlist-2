@@ -40,6 +40,7 @@ export function ChatPanel() {
         
         // Store in localStorage for dashboard
         localStorage.setItem('goampy_referral_link', fullLink);
+        localStorage.setItem('goampy_email', email);
         
         // Dispatch event for ConsolePanel
         window.dispatchEvent(new CustomEvent('referralLinkGenerated', { 

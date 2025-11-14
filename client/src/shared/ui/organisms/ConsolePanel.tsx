@@ -4,19 +4,45 @@ import { Card } from '@/components/ui/card';
 export function ConsolePanel() {
   const [referralLink, setReferralLink] = useState('');
   const [signupCount, setSignupCount] = useState(0);
+  const [points, setPoints] = useState(100);
 
   useEffect(() => {
     // Listen for referral link generation
-    const handleReferralLink = (event: CustomEvent) => {
+    const handleReferralLink = async (event: CustomEvent) => {
       setReferralLink(event.detail.referralLink);
+      
+      // Fetch user stats after signup
+      const email = localStorage.getItem('goampy_email');
+      if (email) {
+        try {
+          const response = await fetch(`/api/me/summary?email=${encodeURIComponent(email)}`);
+          if (response.ok) {
+            const data = await response.json();
+            setSignupCount(data.referrals || 0);
+            setPoints(data.points || 100);
+          }
+        } catch {}
+      }
     };
 
     window.addEventListener('referralLinkGenerated', handleReferralLink as any);
 
-    // Check localStorage for existing link
+    // Check localStorage for existing link and fetch stats
     const stored = localStorage.getItem('goampy_referral_link');
+    const storedEmail = localStorage.getItem('goampy_email');
     if (stored) {
       setReferralLink(stored);
+    }
+    
+    // Fetch stats on mount if email is available
+    if (storedEmail) {
+      fetch(`/api/me/summary?email=${encodeURIComponent(storedEmail)}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.referrals !== undefined) setSignupCount(data.referrals);
+          if (data.points !== undefined) setPoints(data.points);
+        })
+        .catch(() => {});
     }
 
     return () => {
@@ -24,7 +50,6 @@ export function ConsolePanel() {
     };
   }, []);
 
-  const points = 100 + (signupCount * 10);
 
   return (
     <aside aria-label="Mission Control" className="p-6 min-h-[100dvh] bg-gray-900 text-white">
