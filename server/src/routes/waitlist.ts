@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../lib/db.js';
-import { users, waitlistEntries, referralCodes, events } from '../shared/schema.js';
+import { users, waitlistEntries, referralCodes, events, referralEvents } from '../shared/schema.js';
 import { eq } from 'drizzle-orm';
 
 const r = Router();
@@ -18,9 +18,32 @@ r.post('/join', async (req, res) => {
     catch { [u] = await db.select().from(users).where(eq(users.email, email)); }
   }
 
-  // Ensure waitlist entry
+  // Handle referral attribution
+  let referrerUserId = null;
+  if (ref) {
+    const [owner] = await db.select().from(referralCodes).where(eq(referralCodes.code, ref));
+    if (owner) {
+      referrerUserId = owner.userId;
+      // Log signup event for the referrer
+      await db.insert(referralEvents).values({
+        referralCodeId: owner.id,
+        type: 'signup',
+        email
+      });
+    }
+  }
+
+  // Ensure waitlist entry with referrer attribution
   const [wl] = await db.select().from(waitlistEntries).where(eq(waitlistEntries.userId, u.id));
-  if (!wl) { try { await db.insert(waitlistEntries).values({ userId: u.id, source: ref ? 'referral' : 'direct' }); } catch {} }
+  if (!wl) { 
+    try { 
+      await db.insert(waitlistEntries).values({ 
+        userId: u.id, 
+        source: ref ? 'referral' : 'direct',
+        referrerUserId 
+      }); 
+    } catch {} 
+  }
 
   // Ensure referral code (handle collisions)
   const [rc0] = await db.select().from(referralCodes).where(eq(referralCodes.userId, u.id));
