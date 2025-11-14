@@ -1,0 +1,251 @@
+let’s standardize on Supabase Auth (email OTP / magic link) and wire it cleanly into our BFF so the product flow and the +20 “verified” points are first‑class.
+
+Below is a single drop‑in plan with exact commands and file changes. It keeps our BFF pattern (Express) in control, prevents leaking the service role to the browser, and matches the UX you designed:
+
+Landing → Name → Email → (Verify now or skip) → show referral link inline + in Console.
+
+Tour → Chat disabled; buttons only; includes a “Verify” step if not verified.
+
+Dashboard → Mission + referral tools; leaders modal; share via /share/:code.
+
+What we’re implementing
+
+Auth model: Supabase email OTP for identity/verification; BFF issues an httpOnly session cookie upon successful OTP verification. Points are always computed on the server (10 base + 20 if verified + 10 per referral) and exposed via /api/me/summary. The client never re‑calculates points—only refetches summary after key actions. (This exactly supports the Landing/Tour/Dashboard UX.)
+
+1) Install server deps
+
+From the repo root:
+
+npm --workspace server i @supabase/supabase-js jose cookie-parser zod
+# If not installed already (security/logging):
+npm --workspace server i helmet cors express-rate-limit pino-http
+
+
+Secrets (already set in Replit App Secrets):
+SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, DATABASE_URL, and add SESSION_SECRET (random 32+ char string).
+
+2) Supabase clients (admin + anon)
+
+server/src/lib/supabase.ts
+
+import { createClient } from '@supabase/supabase-js';
+
+export const supaAnon = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_ANON_KEY!,
+  { auth: { persistSession: false, autoRefreshToken: false } }
+);
+
+export const supaAdmin = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  { auth: { persistSession: false, autoRefreshToken: false } }
+);
+
+3) Minimal session cookie (JWT, httpOnly)
+
+server/src/lib/session.ts
+
+import { SignJWT, jwtVerify } from 'jose';
+import { Request, Response } from 'express';
+
+const secret = new TextEncoder().encode(process.env.SESSION_SECRET!);
+const NAME = 'ampy.sid';
+
+export type SessionPayload = {
+  sub: string;       // our app user id (UUID) if known
+  email: string;     // normalized email (emailCi)
+};
+
+export async function setSession(res: Response, payload: SessionPayload) {
+  const token = await new SignJWT(payload)
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt()
+    .setExpirationTime('30d')
+    .sign(secret);
+
+  res.cookie(NAME, token, {
+    httpOnly: true, secure: process.env.NODE_ENV !== 'development',
+    sameSite: 'lax', path: '/'
+  });
+}
+
+export async function getSession(req: Request): Promise<SessionPayload | null> {
+  const t = (req as any).cookies?.[NAME];
+  if (!t) return null;
+  try { const { payload } = await jwtVerify(t, secret); return payload as SessionPayload; }
+  catch { return null; }
+}
+
+export function clearSession(res: Response) {
+  res.clearCookie(NAME, { path: '/' });
+}
+
+
+Wire cookie parser + attach session to req
+
+server/src/index.ts (snippets)
+
+import cookieParser from 'cookie-parser';
+app.use(cookieParser());
+
+// attach session (lightweight middleware)
+import { getSession } from './lib/session.js';
+app.use(async (req, _res, next) => {
+  (req as any).session = await getSession(req);
+  next();
+});
+
+4) Auth routes (send OTP, verify OTP → set cookie, mark verified)
+
+server/src/routes/auth.ts
+
+import { Router } from 'express';
+import { z } from 'zod';
+import { supaAdmin } from '../lib/supabase.js';
+import { db } from '../lib/db.js';
+import { users } from '../shared/schema.js';
+import { eq } from 'drizzle-orm';
+import { setSession } from '../lib/session.js';
+
+const r = Router();
+
+const emailSchema = z.string().email().transform(s => s.trim().toLowerCase());
+const disposable = /@(mailinator\.com|10minutemail\.|guerrillamail\.|tempmail)/i;
+
+r.post('/otp/send', async (req, res) => {
+  const email = emailSchema.parse(req.body?.email);
+  if (disposable.test(email)) {
+    return res.status(422).json({ error: { code: 'disposable', message: 'Use a permanent email.' } });
+  }
+
+  // Rate limit handled by global middleware (60/15m recommended)
+  const { error } = await supaAdmin.auth.signInWithOtp({
+    email,
+    options: { shouldCreateUser: true } // Supabase will create an auth user if needed
+  });
+
+  if (error) return res.status(400).json({ error: { code: 'send_failed', message: 'Unable to send OTP' }});
+  // Optional: log event 'otp_sent'
+  return res.json({ status: 'sent' });
+});
+
+r.post('/otp/verify', async (req, res) => {
+  const parse = z.object({ email: emailSchema, code: z.string().min(6).max(12) }).safeParse(req.body);
+  if (!parse.success) return res.status(400).json({ error: { code: 'bad_request' }});
+  const { email, code } = parse.data;
+
+  const { data, error } = await supaAdmin.auth.verifyOtp({ email, token: code, type: 'email' });
+  if (error || !data?.user) {
+    // Optional: log event 'otp_verify_fail'
+    return res.status(400).json({ error: { code: 'verify_failed', message: 'Invalid or expired code' }});
+  }
+
+  // Ensure app user exists & mark verified
+  const emailCi = email;
+  const [u] = await db.select().from(users).where(eq(users.emailCi, emailCi)).limit(1);
+  if (!u) {
+    // if join happens before verify, u may not exist; create minimal user here
+    // or you can require the join flow first and only update here
+    // create minimal record:
+    // await db.insert(users).values({ email: email, emailCi });
+  }
+  await db.update(users).set({ emailVerifiedAt: new Date() }).where(eq(users.emailCi, emailCi));
+
+  // Issue BFF session cookie
+  await setSession(res, { sub: u?.id ?? data.user.id, email: emailCi });
+
+  // Optional: log event 'otp_verified'
+  return res.json({ verified: true });
+});
+
+export default r;
+
+
+Mount it
+
+server/src/index.ts
+
+import auth from './routes/auth.js';
+app.use('/api/auth', auth);
+
+
+Note: We use Supabase Auth to send/verify OTP and treat auth.users as the source of identity. We don’t expose Supabase tokens to the browser; instead, we mint a short‑lived BFF cookie after verification for this waitlist app.
+
+5) Make /api/me/summary authoritative (no client math)
+
+Ensure your summary handler derives points from the DB:
+
+10 base
+
++20 if users.emailVerifiedAt IS NOT NULL
+
++10 × signups (referral_events.type = 'signup' for codes owned by this user)
+
+client behavior: after OTP verification (or any action), just refetch /api/me/summary and render—do not add +20 in client state (remove user.points += 20 from the Landing prototype logic).
+
+6) Update the Landing & Login flows to call real endpoints
+
+In the Landing page, replace the OTP stubs with real calls to our new routes and eliminate client‑side point changes. The structure already matches this (inline OTP + “Resend code” / “Update email” buttons).
+
+Replace stubs (illustrative; adapt to your React code):
+
+async function sendOtp(email) {
+  const r = await fetch('/api/auth/otp/send', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email })
+  });
+  if (!r.ok) throw new Error('otp_send_failed');
+  return true;
+}
+
+async function verifyOtp(email, code) {
+  const r = await fetch('/api/auth/otp/verify', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email, code })
+  });
+  return r.ok; // when ok, cookie is set server-side
+}
+
+// After verify, just refetch summary for points (+20 comes from server)
+
+
+The Tour continues to show a verify step (chat disabled) and should also use these endpoints if the user triggers “Verify.”
+
+7) Secure & observable by default
+
+Rate‑limit /api/auth/* and /api/waitlist/join (e.g., 60 req / 15m).
+
+Helmet + minimal CSP; CORS allow‑list via APP_ORIGIN.
+
+pino-http with redaction: never log authorization, cookie, or emails; do not log response bodies in prod.
+
+DB client: Supabase pooler URL with ssl: 'require', prepare: false, max: 5.
+
+8) Client “Already signed up?” (login) uses the same OTP endpoints
+
+Your prototype’s login path (from “Already signed up?”) should call the same /api/auth/otp/send|verify, and on success we set the cookie and redirect to /dashboard (which then loads stats via /api/me/summary).
+
+9) Acceptance checklist (copy/paste)
+# Send OTP (should respond {status:"sent"})
+curl -s -X POST http://localhost:5177/api/auth/otp/send \
+  -H 'content-type: application/json' -d '{"email":"ada@example.com"}'
+
+# Verify (use a real code in your inbox; for smoke, expect 400 on wrong code)
+curl -i -X POST http://localhost:5177/api/auth/otp/verify \
+  -H 'content-type: application/json' \
+  -d '{"email":"ada@example.com","code":"123456"}'
+
+# Cookie should be set by the BFF; then summary reflects +20 when verifiedAt is set
+curl -s "http://localhost:5177/api/me/summary?email=ada@example.com" | jq .
+# EXPECTED: 10 + 20(verified) + 10*referrals
+
+# Landing/Tour use these endpoints (no client point math); Dashboard pulls live summary and uses /share/:code
+
+Why this design
+
+We are using Supabase Auth for the identity and verification mechanism (OTP).
+
+We preserve the BFF as the single chokepoint for security, rate limiting, and points logic.
+
+It matches the Landing → Tour → Dashboard contract exactly: inline OTP on Landing, disabled chat tour, and a dashboard that simply reads summary/leaderboard and renders referral/share.
