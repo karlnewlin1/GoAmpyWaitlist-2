@@ -6,8 +6,8 @@
     "dev": "BFF_PORT=5177 tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "db:gen": "drizzle-kit generate --config=drizzle.config.ts",
-    "db:push": "drizzle-kit push --config=drizzle.config.ts",
+    "db:gen": "drizzle-kit generate --config=drizzle.config.cjs",
+    "db:push": "drizzle-kit push --config=drizzle.config.cjs",
     "db:migrate": "tsx scripts/migrate.ts"
   },
   "keywords": [],
