@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { supaAdmin } from '../lib/supabase.js';
 import { db } from '../lib/db.js';
@@ -22,7 +22,7 @@ const VerifyOTPBody = z.object({
 });
 
 // Send OTP to email
-router.post('/otp/send', asyncHandler(async (req, res) => {
+router.post('/otp/send', asyncHandler(async (req: Request, res: Response) => {
   const { email } = SendOTPBody.parse(req.body);
   
   // Check for disposable email
@@ -65,7 +65,7 @@ router.post('/otp/send', asyncHandler(async (req, res) => {
 }));
 
 // Verify OTP
-router.post('/otp/verify', asyncHandler(async (req, res) => {
+router.post('/otp/verify', asyncHandler(async (req: Request, res: Response) => {
   const parse = VerifyOTPBody.safeParse(req.body);
   if (!parse.success) {
     return res.status(400).json({ 

@@ -1,10 +1,12 @@
 import express from 'express';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import { randomUUID } from 'crypto';
 import { getCorsMiddleware } from './middleware/cors.js';
 import { getLoggerMiddleware } from './middleware/logger.js';
 import { errorHandler } from './middleware/errors.js';
 import { joinLimiter, authLimiter } from './middleware/rateLimit.js';
+import { getSession } from './lib/session.js';
 
 // Routes
 import health from './routes/health.js';
@@ -30,6 +32,9 @@ export function createApp() {
 
   // Body parsing
   app.use(express.json());
+  
+  // Cookie parsing
+  app.use(cookieParser());
 
   // Logging
   app.use(getLoggerMiddleware());
@@ -38,6 +43,12 @@ export function createApp() {
   app.use((req, res, next) => {
     const id = (req as any).log?.bindings()?.reqId ?? randomUUID();
     res.setHeader('x-request-id', id);
+    next();
+  });
+  
+  // Attach session to request (lightweight middleware)
+  app.use(async (req, res, next) => {
+    (req as any).session = await getSession(req);
     next();
   });
 
