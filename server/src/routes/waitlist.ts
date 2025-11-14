@@ -11,11 +11,18 @@ const baseCode = (s:string)=> (s.split('@')[0] || 'user').toLowerCase().replace(
 r.post('/join', async (req, res) => {
   const { name, email, ref } = Body.parse(req.body);
 
-  // Upsert user by email
-  let [u] = await db.select().from(users).where(eq(users.email, email));
+  // Upsert user by email (case-insensitive)
+  const emailLower = email.trim().toLowerCase();
+  let [u] = await db.select().from(users).where(eq(users.emailCi, emailLower));
   if (!u) {
-    try { [u] = await db.insert(users).values({ email, name }).returning(); }
-    catch { [u] = await db.select().from(users).where(eq(users.email, email)); }
+    try { 
+      [u] = await db.insert(users).values({ 
+        email,  // display email
+        emailCi: emailLower,  // lowercased for uniqueness
+        name 
+      }).returning(); 
+    }
+    catch { [u] = await db.select().from(users).where(eq(users.emailCi, emailLower)); }
   }
 
   // Handle referral attribution

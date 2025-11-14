@@ -2,10 +2,12 @@ import { pgTable, uuid, text, timestamp, jsonb, uniqueIndex } from 'drizzle-orm/
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
-  email: text('email').notNull(),
+  email: text('email').notNull(),          // display email
+  emailCi: text('email_ci').notNull(),     // lowercased for uniqueness
   name: text('name'),
+  emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow()
-}, (t) => ({ ux_email: uniqueIndex('ux_users_email').on(t.email) }));
+}, (t) => ({ ux_email_ci: uniqueIndex('ux_users_email_ci').on(t.emailCi) }));
 
 export const waitlistEntries = pgTable('waitlist_entries', {
   id: uuid('id').primaryKey().defaultRandom(),
