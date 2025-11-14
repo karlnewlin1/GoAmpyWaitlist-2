@@ -1,8 +1,106 @@
-export function ConsolePanel(){
+import { useState, useEffect } from 'react';
+import { Card } from '@/components/ui/card';
+
+export function ConsolePanel() {
+  const [referralLink, setReferralLink] = useState('');
+  const [signupCount, setSignupCount] = useState(0);
+
+  useEffect(() => {
+    // Listen for referral link generation
+    const handleReferralLink = (event: CustomEvent) => {
+      setReferralLink(event.detail.referralLink);
+    };
+
+    window.addEventListener('referralLinkGenerated', handleReferralLink as any);
+
+    // Check localStorage for existing link
+    const stored = localStorage.getItem('goampy_referral_link');
+    if (stored) {
+      setReferralLink(stored);
+    }
+
+    return () => {
+      window.removeEventListener('referralLinkGenerated', handleReferralLink as any);
+    };
+  }, []);
+
+  const points = 100 + (signupCount * 10);
+
   return (
-    <aside aria-label="Mission Control" className="p-6 min-h-[100dvh]">
-      <div className="text-xs text-white/60 mb-2">▸ MISSION CONTROL</div>
-      <div className="rounded-card border border-white/10 p-4">Get your first referral • +10 per signup.</div>
+    <aside aria-label="Mission Control" className="p-6 min-h-[100dvh] bg-gray-900 text-white">
+      <div className="text-xs text-white/60 mb-4">▸ MISSION CONTROL</div>
+      
+      <div className="space-y-4">
+        {/* Points Display */}
+        <Card className="p-6 bg-white/5 border-white/10">
+          <div className="text-3xl font-bold mb-2">{points}</div>
+          <div className="text-sm text-white/60">Total Points</div>
+        </Card>
+
+        {/* Mission Status */}
+        <Card className="p-4 bg-white/5 border-white/10">
+          <h3 className="font-medium mb-3">Active Missions</h3>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-sm">Join the waitlist</span>
+              <span className="text-xs text-green-400">✓ Complete</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-sm">Get your first referral</span>
+              <span className="text-xs text-white/40">
+                {signupCount > 0 ? '✓ Complete' : 'In Progress'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-sm">Refer 5 friends</span>
+              <span className="text-xs text-white/40">{signupCount}/5</span>
+            </div>
+          </div>
+        </Card>
+
+        {/* Referral Stats */}
+        {referralLink && (
+          <Card className="p-4 bg-white/5 border-white/10">
+            <h3 className="font-medium mb-3">Referral Stats</h3>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-white/60">Total Signups</span>
+                <span className="text-lg font-medium">{signupCount}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-white/60">Points Earned</span>
+                <span className="text-lg font-medium">+{signupCount * 10}</span>
+              </div>
+            </div>
+            
+            <div className="mt-4 pt-4 border-t border-white/10">
+              <p className="text-xs text-white/40 mb-2">Your referral link:</p>
+              <p className="text-xs text-white/60 break-all font-mono">
+                {referralLink}
+              </p>
+            </div>
+          </Card>
+        )}
+
+        {/* Leaderboard Preview */}
+        <Card className="p-4 bg-white/5 border-white/10">
+          <h3 className="font-medium mb-3">Leaderboard</h3>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span>🥇 Top Referrer</span>
+              <span className="text-white/60">250 pts</span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span>🥈 Second Place</span>
+              <span className="text-white/60">180 pts</span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-yellow-400">You</span>
+              <span className="text-white/60">{points} pts</span>
+            </div>
+          </div>
+        </Card>
+      </div>
     </aside>
   );
 }
