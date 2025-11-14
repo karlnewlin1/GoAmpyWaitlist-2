@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Share2, Copy } from 'lucide-react';
 
 export function ConsolePanel() {
   const [referralLink, setReferralLink] = useState('');
@@ -172,7 +171,9 @@ export function ConsolePanel() {
                     <>× Failed</>
                   ) : (
                     <>
-                      <Share2 className="w-4 h-4 mr-2" />
+                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m9.032 4.026a3 3 0 10-2.684-4.342m2.684 4.342a3 3 0 00-2.684-4.342m0 0a3 3 0 00-2.684 4.342M6.316 10.658a3 3 0 012.684 4.342" />
+                      </svg>
                       {navigator.share ? 'Share' : 'Copy'}
                     </>
                   )}
