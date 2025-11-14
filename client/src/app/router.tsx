@@ -1,11 +1,16 @@
-import { createBrowserRouter } from 'react-router-dom';
+import { Switch, Route } from 'wouter';
 import { LandingPage } from '../pages/landing/LandingPage';
 import { TourPage } from '../pages/tour/TourPage';
 import { DashboardPage } from '../pages/dashboard/DashboardPage';
 import { LoginPage } from '../pages/login/LoginPage';
-export const router = createBrowserRouter([
-  { path: '/', element: <LandingPage /> },
-  { path: '/tour', element: <TourPage /> },
-  { path: '/dashboard', element: <DashboardPage /> },
-  { path: '/login', element: <LoginPage /> }
-]);
+
+export function Router() {
+  return (
+    <Switch>
+      <Route path="/" component={LandingPage} />
+      <Route path="/tour" component={TourPage} />
+      <Route path="/dashboard" component={DashboardPage} />
+      <Route path="/login" component={LoginPage} />
+    </Switch>
+  );
+}
