@@ -1,10 +1,24 @@
 import { db } from '../lib/db.js';
 import { users, waitlistEntries, referralCodes, events, referralEvents } from '../shared/schema.js';
 import { and, eq } from 'drizzle-orm';
+import slugify from 'slugify';
+import { customAlphabet } from 'nanoid/non-secure';
 
-// Canonicalize helpers
-export const normCode = (s: string) => (s || '').toLowerCase().trim().replace(/[^a-z0-9]/g, '').slice(0, 24);
-export const base = (e: string) => (e.split('@')[0] || 'user').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 8) || 'user';
+// Create nanoid generator with unambiguous characters
+const nanoid = customAlphabet('3456789ABCDEFGHJKLMNPQRTUVWXY', 6);
+
+// Canonicalize helpers for lookups (backward compatibility)
+export const normCode = (s: string) => (s || '').toLowerCase().trim();
+
+/**
+ * Generate a strong referral code using slugified username + random suffix
+ * Example: "john-doe-X7Q3VG"
+ */
+export function makeReferralCode(email: string): string {
+  const username = email.split('@')[0] || 'user';
+  const slug = slugify(username, { lower: true, strict: true }).slice(0, 20);
+  return `${slug}-${nanoid()}`;
+}
 
 export class ReferralService {
   /**
@@ -15,11 +29,12 @@ export class ReferralService {
     const [existing] = await tx.select().from(referralCodes).where(eq(referralCodes.userId, userId));
     if (existing) return existing.code;
 
-    // Generate new code with collision resistance
+    // Generate new code with stronger pattern
     let code: string | null = null;
-    let candidate = base(email);
     
+    // Try up to 5 times with different random suffixes
     for (let i = 0; i < 5 && !code; i++) {
+      const candidate = makeReferralCode(email);
       try {
         const [result] = await tx.insert(referralCodes).values({ 
           userId, 
@@ -27,15 +42,16 @@ export class ReferralService {
         }).returning();
         code = result.code;
       } catch {
-        candidate = `${base(email)}${Math.floor(1000 + Math.random() * 9000)}`.slice(0, 12);
+        // Collision detected, will retry with new random suffix
       }
     }
     
-    // Fallback to random code
+    // Extremely unlikely fallback - use pure random
     if (!code) {
+      const fallback = `user-${nanoid()}${nanoid()}`;
       const [result] = await tx.insert(referralCodes).values({
         userId,
-        code: Math.random().toString(36).slice(2, 8)
+        code: fallback
       }).returning();
       code = result.code;
     }
@@ -44,7 +60,7 @@ export class ReferralService {
   }
 
   /**
-   * Attribute a signup to a referrer (with deduplication)
+   * Attribute a signup to a referrer (with deduplication and self-referral prevention)
    */
   async attributeSignup(tx: any, refCode: string, joinerId: string, joinerEmail: string): Promise<void> {
     if (!refCode) return;
@@ -55,10 +71,8 @@ export class ReferralService {
     if (!owner) return;
 
     // Self-referral guard: prevent users from referring themselves
-    const [joinerUser] = await tx.select().from(users).where(eq(users.id, joinerId));
-    if (joinerUser && owner.userId === joinerId) {
-      console.log(`Self-referral blocked: ${joinerEmail} tried to use their own code`);
-      return;
+    if (owner.userId === joinerId) {
+      throw new Error('SELF_REFERRAL');
     }
 
     // Update waitlist entry with referrer

@@ -60,7 +60,18 @@ r.post('/join', asyncHandler(async (req, res) => {
     const code = await referralService.generateCode(tx, u.id, email);
 
     // 4) Attribute referral (with self-referral guard and deduplication)
-    await referralService.attributeSignup(tx, refCode, u.id, email);
+    try {
+      await referralService.attributeSignup(tx, refCode, u.id, email);
+    } catch (error: any) {
+      if (error.message === 'SELF_REFERRAL') {
+        throw new AppError(
+          'You cannot use your own referral code',
+          'self_referral',
+          400
+        );
+      }
+      throw error;
+    }
 
     // 5) lifecycle event
     await tx.insert(events).values({ 
