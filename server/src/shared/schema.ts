@@ -1,4 +1,6 @@
 import { pgTable, uuid, text, timestamp, jsonb, uniqueIndex, index } from 'drizzle-orm/pg-core';
+import { createInsertSchema } from 'drizzle-zod';
+import { z } from 'zod';
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -53,3 +55,40 @@ export const events = pgTable('events', {
   ix_user: index('ix_events_user').on(t.userId),
   ix_name: index('ix_events_name').on(t.eventName),
 }));
+
+// Insert schemas (omit auto-generated fields)
+export const insertUserSchema = createInsertSchema(users).omit({ 
+  id: true, 
+  createdAt: true,
+  emailCi: true // This is computed from email
+});
+export type InsertUser = z.infer<typeof insertUserSchema>;
+export type SelectUser = typeof users.$inferSelect;
+
+export const insertWaitlistEntrySchema = createInsertSchema(waitlistEntries).omit({ 
+  id: true,
+  createdAt: true 
+});
+export type InsertWaitlistEntry = z.infer<typeof insertWaitlistEntrySchema>;
+export type SelectWaitlistEntry = typeof waitlistEntries.$inferSelect;
+
+export const insertReferralCodeSchema = createInsertSchema(referralCodes).omit({ 
+  id: true,
+  createdAt: true 
+});
+export type InsertReferralCode = z.infer<typeof insertReferralCodeSchema>;
+export type SelectReferralCode = typeof referralCodes.$inferSelect;
+
+export const insertReferralEventSchema = createInsertSchema(referralEvents).omit({ 
+  id: true,
+  createdAt: true 
+});
+export type InsertReferralEvent = z.infer<typeof insertReferralEventSchema>;
+export type SelectReferralEvent = typeof referralEvents.$inferSelect;
+
+export const insertEventSchema = createInsertSchema(events).omit({ 
+  id: true,
+  createdAt: true 
+});
+export type InsertEvent = z.infer<typeof insertEventSchema>;
+export type SelectEvent = typeof events.$inferSelect;
