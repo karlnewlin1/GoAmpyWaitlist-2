@@ -1,0 +1,349 @@
+Below is a precise review + copy‑pasteable patches. I tie UX decisions to the prototypes (split Chat left / Console right for Landing & Dashboard, Tour as button‑driven with disabled chat).
+
+✅ Confirmed working (keep)
+
+Join flow generates a unique referral link and persists it.
+
+/r/:code logs a click then redirects to /?ref=<code>.
+
+Joining with ?ref=<code> sets referrerUserId and logs signup.
+
+Emails are case‑insensitive.
+
+Request logging added; health endpoint improved.
+
+Great foundation. Now the improvements below make it robust, secure, and ready for UI integration.
+
+🔧 High‑impact improvements (do these now)
+1) Make POST /api/waitlist/join atomic (transaction)
+
+Today, user insert + waitlist + code generation + events happen in series. Wrap in a DB transaction to prevent half‑writes on race conditions.
+
+server/src/routes/waitlist.ts
+
+import { and, eq } from 'drizzle-orm';
+import { db } from '../lib/db.js';
+import { users, waitlistEntries, referralCodes, events, referralEvents } from '../shared/schema.js';
+
+r.post('/join', async (req, res) => {
+  const { name, email, ref } = Body.parse(req.body);
+  const eci = email.trim().toLowerCase();
+
+  const result = await db.transaction(async (tx) => {
+    // 1) upsert user by emailCi
+    let [u] = await tx.select().from(users).where(eq(users.emailCi, eci));
+    if (!u) {
+      try { [u] = await tx.insert(users).values({ email, emailCi: eci, name }).returning(); }
+      catch { [u] = await tx.select().from(users).where(eq(users.emailCi, eci)); }
+    }
+
+    // 2) waitlist row (idempotent)
+    const [wl] = await tx.select().from(waitlistEntries).where(eq(waitlistEntries.userId, u.id));
+    if (!wl) await tx.insert(waitlistEntries).values({ userId: u.id, source: ref ? 'referral' : 'direct' });
+
+    // 3) referral code (collision‑resistant)
+    const [rc0] = await tx.select().from(referralCodes).where(eq(referralCodes.userId, u.id));
+    let code = rc0?.code;
+    if (!code) {
+      const base = (s:string)=> (s.split('@')[0]||'user').toLowerCase().replace(/[^a-z0-9]+/g,'').slice(0,8) || 'user';
+      let candidate = base(email);
+      for (let i=0; i<5 && !code; i++) {
+        try { code = (await tx.insert(referralCodes).values({ userId: u.id, code: candidate }).returning())[0].code; }
+        catch { candidate = `${base(email)}${Math.floor(1000+Math.random()*9000)}`.slice(0,12); }
+      }
+      if (!code) code = (await tx.insert(referralCodes).values({ userId: u.id, code: Math.random().toString(36).slice(2,8) }).returning())[0].code;
+    }
+
+    // 4) attribute referral signup if ref present
+    if (ref) {
+      const [owner] = await tx.select().from(referralCodes).where(eq(referralCodes.code, ref));
+      if (owner) {
+        await tx
+          .update(waitlistEntries)
+          .set({ referrerUserId: owner.userId, source: 'referral' })
+          .where(eq(waitlistEntries.userId, u.id));
+        await tx.insert(referralEvents).values({ referralCodeId: owner.id, type: 'signup', email });
+      }
+    }
+
+    // 5) lifecycle event
+    await tx.insert(events).values({ userId: u.id, eventName: 'onboarding_completed', payload: { ref: ref ?? null } });
+
+    return { code, userId: u.id };
+  });
+
+  res.json({ code: result.code, referralLink: `/r/${result.code}` });
+});
+
+
+This directly feeds the Dashboard mission (“Get your first referral”) and stat chips in the right panel.
+
+2) Add foreign keys + indexes for integrity & speed
+
+Right now, these tables can drift. Add FKs + indexes to keep referential integrity and fast lookups.
+
+server/src/shared/schema.ts (augment definitions):
+
+import { pgTable, uuid, text, timestamp, jsonb, uniqueIndex, index } from 'drizzle-orm/pg-core';
+
+// users: add emailCi + unique
+export const users = pgTable('users', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email').notNull(),
+  emailCi: text('email_ci').notNull(),
+  name: text('name'),
+  emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow()
+}, (t) => ({
+  ux_email_ci: uniqueIndex('ux_users_email_ci').on(t.emailCi),
+}));
+
+export const waitlistEntries = pgTable('waitlist_entries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  source: text('source').$type<'direct'|'referral'|'campaign'>().default('direct'),
+  referrerUserId: uuid('referrer_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow()
+}, (t) => ({
+  ux_user: uniqueIndex('ux_waitlist_user').on(t.userId),
+  ix_referrer: index('ix_waitlist_referrer').on(t.referrerUserId),
+}));
+
+export const referralCodes = pgTable('referral_codes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  code: text('code').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow()
+}, (t) => ({
+  ux_user: uniqueIndex('ux_referral_user').on(t.userId),
+  ux_code: uniqueIndex('ux_referral_code').on(t.code),
+}));
+
+export const referralEvents = pgTable('referral_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  referralCodeId: uuid('referral_code_id').notNull().references(() => referralCodes.id, { onDelete: 'cascade' }),
+  type: text('type').$type<'click'|'signup'>().notNull(),
+  email: text('email'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow()
+}, (t) => ({
+  ix_referral_code: index('ix_referral_events_code').on(t.referralCodeId),
+  ix_type: index('ix_referral_events_type').on(t.type),
+}));
+
+export const events = pgTable('events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  eventName: text('event_name').notNull(),
+  payload: jsonb('payload'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow()
+}, (t) => ({
+  ix_user: index('ix_events_user').on(t.userId),
+  ix_name: index('ix_events_name').on(t.eventName),
+}));
+
+
+Run migrations (Replit Secrets already provide env):
+
+npm --workspace server run db:gen
+NODE_OPTIONS=--dns-result-order=ipv4first npm --workspace server run db:push \
+ || NODE_OPTIONS=--dns-result-order=ipv6first npm --workspace server run db:push
+
+3) Pooler safety (prepare=false)
+
+You’re using Supabase pooler (6543). Ensure:
+
+server/src/lib/db.ts
+
+const client = postgres(process.env.DATABASE_URL!, {
+  ssl: 'require',
+  max: 1,
+  prepare: false, // required for pooler
+});
+export const db = drizzle(client, { schema });
+
+4) Harden inputs server‑side (disposable emails, rate limit)
+
+The Landing prototype already blocks disposable domains client‑side; enforce the same server‑side to avoid junk. Add rate limiting to POST /api/waitlist/join.
+
+server/src/middleware/rateLimit.ts
+
+import rateLimit from 'express-rate-limit';
+export const joinLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+});
+
+
+server/src/routes/waitlist.ts
+
+// at top
+const DISPOSABLE = /(^|\.)((mailinator|10minutemail|guerrillamail|tempmail)\.com)$/i;
+
+// inside handler, before using email:
+if (DISPOSABLE.test(email.split('@')[1] || '')) {
+  return res.status(400).json({ error: 'disposable_email_not_allowed' });
+}
+
+
+server/src/index.ts
+
+import { joinLimiter } from './middleware/rateLimit.js';
+app.use('/api/waitlist/join', joinLimiter);
+
+
+This keeps quality high as the funnel scales (spam protection & fewer junk addresses). The client already hints at these checks in the new 3‑question flow.
+
+5) Add a summary endpoint for Console chips
+
+Fuel the right‑panel chips (rank, points, referrals) on Landing/Tour/Dashboard until Auth is wired. Prototype shows chips in all three pages.
+
+server/src/routes/me.ts
+
+import { Router } from 'express';
+import { db } from '../lib/db.js';
+import { users, referralCodes, referralEvents } from '../shared/schema.js';
+import { eq } from 'drizzle-orm';
+const r = Router();
+
+// TEMP: identify by email until Supabase Auth is enabled
+r.get('/summary', async (req, res) => {
+  const email = String(req.query.email || '').trim().toLowerCase();
+  if (!email) return res.status(400).json({ error: 'email required' });
+
+  const [u] = await db.select().from(users).where(eq(users.emailCi, email));
+  if (!u) return res.json({ points: 0, referrals: 0, rank: null });
+
+  const [rc] = await db.select().from(referralCodes).where(eq(referralCodes.userId, u.id));
+  const rows = rc ? await db.select().from(referralEvents).where(eq(referralEvents.referralCodeId, rc.id)) : [];
+  const signups = rows.filter(r => r.type === 'signup').length;
+
+  const base = 10;
+  const verified = u.emailVerifiedAt ? 20 : 0;
+  res.json({ points: base + verified + signups * 10, referrals: signups, rank: null });
+});
+export default r;
+
+
+server/src/index.ts
+
+import me from './routes/me.js';
+app.use('/api/me', me);
+
+
+Use this to hydrate the Console chips on Landing and Tour (points, rank, referrals), and the Dashboard cards.
+
+6) Vite port consistency + proxy
+
+The junior noted the client on 5000; earlier logs used 5176. Choose one. If you’re happy with 5000, lock it in and proxy /api + /r to 5177.
+
+client/vite.config.ts
+
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5000, // keep it if that’s what Replit is exposing
+    proxy: { '/api': 'http://localhost:5177', '/r': 'http://localhost:5177' }
+  }
+});
+
+
+This preserves the split shell experience across pages (no CORS noise). Landing & Dashboard share the shell; Tour is the button‑driven variant with disabled chat.
+
+🧼 Product polish (quick, valuable)
+A) Rich share cards for LinkedIn
+
+Sharing /r/:code will just unfurl your generic Landing meta. Create a /share/:code route that serves OG tags with referrer context, then meta‑refresh to /?ref=code.
+
+server/src/routes/share.ts
+
+import { Router } from 'express';
+import { db } from '../lib/db.js';
+import { referralCodes, users } from '../shared/schema.js';
+import { eq } from 'drizzle-orm';
+
+const r = Router();
+r.get('/:code', async (req, res) => {
+  const { code } = req.params;
+  const [rc] = await db.select().from(referralCodes).where(eq(referralCodes.code, code));
+  let name = 'an Ampy creator';
+  if (rc) {
+    const [u] = await db.select().from(users).where(eq(users.id, rc.userId));
+    if (u?.name) name = u.name.split(' ')[0];
+  }
+
+  const url = `/?ref=${encodeURIComponent(code)}`;
+  res.set('content-type', 'text/html; charset=utf-8').send(`<!doctype html>
+  <html><head>
+    <meta property="og:title" content="Join Ampy — beta waitlist">
+    <meta property="og:description" content="${name} invited you. Earn points and priority by sharing your link.">
+    <meta property="og:url" content="${url}">
+    <meta property="og:image" content="https://goampy.com/og/ampy-card.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta http-equiv="refresh" content="0; url=${url}">
+  </head><body>Redirecting…</body></html>`);
+});
+export default r;
+
+
+server/src/index.ts
+
+import share from './routes/share.js';
+app.use('/share', share);
+
+
+Then surface /share/<code> in your UI’s “Share on LinkedIn” button for better unfurls. The Dashboard referral card already has the Share CTA—swap the URL to /share/<code>.
+
+B) Security headers & CORS discipline
+
+Keep helmet({ contentSecurityPolicy: false }) in dev; add a proper CSP at deploy.
+
+Restrict CORS with APP_ORIGIN (comma‑separated) in Replit Secrets:
+
+app.use(cors({ origin: process.env.APP_ORIGIN?.split(',') ?? true }));
+
+C) Logging hygiene
+
+Use pino-http with genReqId + redaction:
+
+app.use(pinoHttp({
+  genReqId: () => crypto.randomUUID(),
+  redact: { paths: ['req.headers.authorization', 'req.body.email'], remove: true }
+}));
+
+🖥️ Frontend parity checks (with prototypes)
+
+Landing: after 3‑question flow, immediately show the referral link (inline chat card and/or console). The current prototype pattern is correct—ensure your integrated call replaces the stub and updates the UI accordingly.
+
+Tour: keep chat disabled, drive via buttons, show Orientation Progress, “How Priority Works”, Rewards Preview; on finish, take the user to Dashboard and surface the next mission.
+
+Dashboard: on mount, render the referral card when a link exists (from localStorage or an API); the template already exists with Copy/LinkedIn buttons.
+
+For accessibility: you’ve already got ARIA roles and focus traps in the prototypes. Keep them intact as you port to React (e.g., modal focus trap, live regions, “disabled chat” overlay during Tour).
+
+🧪 6‑step verification (fast)
+
+Join “Alice” → receive /r/alice…; inline card appears on Landing; localStorage stores link.
+
+Click Alice’s link → /?ref=alice… and one click event added.
+
+Signup via ?ref= → signup event logged; waitlist_entries.referrer_user_id set.
+
+Dashboard → referral card renders from stored link; share button opens /share/<code>.
+
+Tour → disabled input; buttons advance progress; finishing moves to Dashboard.
+
+Summary API: /api/me/summary?email=alice@example.com → returns { points, referrals } for Console chips on all pages.
+
+📦 Optional “nice‑to‑have” next
+
+Auth: Supabase OTP/magic link; set emailVerifiedAt and +20 points.
+
+Leaderboard: /api/leaderboard/top (rank by points desc, tie → earliest signup).
+
+PWA: add manifest.webmanifest, basic SW to pre‑cache shell; improves “native feel”.
+
+Error shape: standardize { error, code } across BFF; show helpful messages in Console “terminal”.
