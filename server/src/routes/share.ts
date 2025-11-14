@@ -29,12 +29,19 @@ r.get('/:code', async (req, res) => {
   const url = `/?ref=${encodeURIComponent(code)}`;
   const shareUrl = `${req.protocol}://${req.get('host')}/share/${code}`;
   
-  res.set('content-type', 'text/html; charset=utf-8').send(`<!doctype html>
+  // Set cache headers for social media scrapers (10 minute TTL)
+  res.set('Cache-Control', 'public, max-age=600');
+  res.set('content-type', 'text/html; charset=utf-8');
+  
+  res.send(`<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title}</title>
+  
+  <!-- Prevent search engine indexing -->
+  <meta name="robots" content="noindex">
   
   <!-- OG Tags for LinkedIn/Social Preview -->
   <meta property="og:title" content="${title}">
