@@ -22,7 +22,17 @@
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true
+    "noUncheckedSideEffectImports": true,
+    
+    /* Path mappings */
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@/components/*": ["src/components/*"],
+      "@/lib/*": ["src/lib/*"],
+      "@/shared/*": ["src/shared/*"],
+      "@shared/*": ["../server/src/shared/*"]
+    }
   },
   "include": ["src"]
 }
