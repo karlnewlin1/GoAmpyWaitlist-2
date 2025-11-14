@@ -9,6 +9,7 @@ import events from './routes/events.js';
 import me from './routes/me.js';
 import share from './routes/share.js';
 import { joinLimiter } from './middleware/rateLimit.js';
+import { errorHandler } from './middleware/errors.js';
 import { db } from './lib/db.js';
 import { referralCodes, referralEvents } from './shared/schema.js';
 import { eq, sql } from 'drizzle-orm';
@@ -89,6 +90,9 @@ app.get('/r/:code', async (req, res) => {
   } catch {}
   res.redirect(`/?ref=${encodeURIComponent(code)}`);
 });
+
+// Error handler must be the last middleware
+app.use(errorHandler);
 
 const port = Number(process.env.BFF_PORT || 5177);
 app.listen(port, () => console.log(`BFF on :${port}`));
