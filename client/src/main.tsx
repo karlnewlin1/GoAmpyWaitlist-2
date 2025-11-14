@@ -1,13 +1,15 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
-import App from './app/app';
+import { LandingPage } from './pages/landing/LandingPage';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Root element not found');
 
+// Temporarily render LandingPage directly to ensure app works
+// TODO: Integrate wouter routing after resolving React version conflicts
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
-    <App />
+    <LandingPage />
   </React.StrictMode>
 );
